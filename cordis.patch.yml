@@ -1,0 +1,3 @@
+- insert:
+    - id: agent-console
+      name: '@local/dsh-agent-console'

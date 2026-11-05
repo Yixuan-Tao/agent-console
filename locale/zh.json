@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent 控制台",
+    "description": "统一查看本机 Codex、Grok Bot、Marvis、WorkBuddy 正在做什么（只读）。"
+  }
+}
