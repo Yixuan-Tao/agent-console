@@ -19,6 +19,7 @@ window.__ModuleLoader__.load({
       session: '/agent-console/session',
       send: '/agent-console/send',
       job: '/agent-console/job',
+      asset: '/agent-console/asset',
     }
     const POLL_MS = 5000
     const JOB_POLL_MS = 1200
@@ -336,6 +337,65 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // Official app icons bundled under assets/ (extracted from the installed apps).
+    const ASSET_APPS = new Set(['codex', 'grokbot', 'marvis', 'workbuddy', 'dsh', 'copilot', 'gemini'])
+    const assetUrl = (app) => `${ROUTES.asset}?name=${encodeURIComponent(app)}.png`
+
+    function AppIcon({ app, size = 20, dotColor, pulse }) {
+      const [failed, setFailed] = useState(false)
+      if (!ASSET_APPS.has(app) || failed) {
+        return dotColor ? h(Dot, { color: dotColor, pulse }) : null
+      }
+      return h('img', {
+        src: assetUrl(app), width: size, height: size, alt: '', draggable: false,
+        onError: () => setFailed(true),
+        style: { display: 'block', objectFit: 'contain', borderRadius: 5, flex: '0 0 auto' },
+      })
+    }
+
+    function Avatar({ agent, accent, busy, offline, waiting }) {
+      const [failed, setFailed] = useState(false)
+      if (!ASSET_APPS.has(agent.app) || failed) {
+        return h(Mascot, { accent, busy, offline, waiting })
+      }
+      return h('div', {
+        style: {
+          position: 'relative', width: 64, height: 64,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        },
+      },
+        h('img', {
+          src: assetUrl(agent.app), width: 56, height: 56, alt: '', draggable: false,
+          onError: () => setFailed(true),
+          style: {
+            display: 'block', objectFit: 'contain', borderRadius: 13,
+            opacity: offline ? 0.45 : 1,
+            filter: offline ? 'grayscale(0.7)' : 'none',
+            boxShadow: busy
+              ? `0 0 12px color-mix(in srgb, ${TOKENS.ok} 35%, transparent)`
+              : 'none',
+          },
+        }),
+        waiting
+          ? h('span', {
+            className: 'ac-bubble',
+            style: {
+              position: 'absolute', right: 0, top: 0,
+              width: 16, height: 16, borderRadius: '50%',
+              background: TOKENS.warn, color: TOKENS.card,
+              fontSize: 11, fontWeight: 700, lineHeight: '16px', textAlign: 'center',
+            },
+          }, '!')
+          : null,
+        offline
+          ? h('span', {
+            className: 'ac-zzz',
+            style: { position: 'absolute', right: -2, top: -2, fontSize: 11, color: TOKENS.sub },
+          }, 'z')
+          : null,
+      )
+    }
+
     function Station({ agent, onOpen, t }) {
       const sessions = agent.sessions ?? []
       const pending = agent.pendingApprovals ?? 0
@@ -369,7 +429,7 @@ window.__ModuleLoader__.load({
             alignItems: 'flex-end', height: 64,
           },
         },
-          h(Mascot, { accent, busy, offline, waiting: pending > 0 }),
+          h(Avatar, { agent, accent, busy, offline, waiting: pending > 0 }),
           agent.app === 'dsh'
             ? h('span', {
               style: {
@@ -408,7 +468,7 @@ window.__ModuleLoader__.load({
             maxWidth: 220, minWidth: 0,
           },
         },
-          h('span', { style: { width: 7, height: 7, borderRadius: '50%', background: accent, flex: '0 0 auto' } }),
+          h(AppIcon, { app: agent.app, size: 16, dotColor: accent }),
           h('span', { style: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' } }, agent.displayName),
           h('span', { style: { fontSize: 10, color: stateColor, whiteSpace: 'nowrap' } }, state),
           sessions.length
@@ -515,7 +575,7 @@ window.__ModuleLoader__.load({
         },
       },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
-          h(Dot, { color: state.color, pulse: agent.busy }),
+          h(AppIcon, { app: agent.app, size: 18, dotColor: state.color, pulse: agent.busy }),
           h('span', { style: { fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' } }, agent.displayName),
           h('span', { style: { flex: 1 } }),
           pill(state.label, agent.busy ? TOKENS.ok : TOKENS.sub),
@@ -819,6 +879,7 @@ window.__ModuleLoader__.load({
           },
         },
           btn(`← ${t('workspace.back')}`, onBack),
+          h(AppIcon, { app: agent.app, size: 20, dotColor: TOKENS.brand }),
           h('span', { style: { fontSize: 15, fontWeight: 600 } }, agent.displayName),
           pill(stateOf(agent, t).label, agent.busy ? TOKENS.ok : TOKENS.sub),
           agent.discovered

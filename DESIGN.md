@@ -290,6 +290,17 @@ P1 其余限制：WorkBuddy 的 CLI 运行是**新起一次运行**，不会续�
 
 验证（无浏览器控制，改用沙箱渲染测试）：[tools/smoke-client.mjs](../tools/smoke-client.mjs) 用 vm + 桩 React 执行 `client.js`，确认工厂注册、两个插槽注册、64 个文案键；并展开组件树得到 **5 个可点击工位、7 个 SVG 节点、2 个视图切换按钮**，无运行期异常。像素级观感仍未验证，需人工看一眼。
 
+### 9.1 角色形象改为官方图标（2026-11-06）
+
+原来工位上是我们自己画的围巾小怪兽。现在每个 Agent 直接用**对应应用自带的官方图标**：
+
+- 来源：本机已安装应用的官方资源——`PrivateExtractIcons` 从各 exe 提取 256×256（Codex/ChatGPT、Grok Bot、WorkBuddy、DeepSeek Harness、Copilot、Gemini），Marvis 用其安装目录里的 `resources/icons/icon-original.png`。不联网抓图、不重绘、不引第三方图库。
+- 分发：`assets/<app>.png` 随插件走，Host 新增 `GET /agent-console/asset?name=<app>.png`（文件名白名单 + 目录越界校验）；客户端 `onError` 回退到内置卡通形象，所以发现的应用没有图标时也不会破版。
+- 状态表达保留：忙碌时图标外发光、离线时降饱和并飘 z、待确认时右上角「!」气泡；工位铭牌、显示器、汇总逻辑不变。
+- 版权说明：这些图标是各厂商商标，仅用于标识对应应用；删除 assets 下文件即可回退。
+
+验证：沙箱渲染展开后 6 个工位、2 个 SVG（植物）、**12 个官方图标 `<img>`**（工位头像 + 铭牌小图标）；`/agent-console/asset` 返回 `image/png`，非法文件名被拒。
+
 ## 十、自动发现更多 Agent（2026-11-06）
 
 原来只有四个写死的适配器（Codex / Grok / Marvis / WorkBuddy），换一台机器或装新应用就看不到。现在增加一层**发现器**：显式适配器负责"能读会写"的深度集成，发现器负责把机器上其它 AI Agent 应用先列出来，标成「已发现」，等有人补适配器。

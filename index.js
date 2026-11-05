@@ -9,6 +9,7 @@
  */
 import { execFile, spawn } from 'node:child_process'
 import { existsSync, createReadStream, readdirSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -17,12 +18,15 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const COLLECTOR = path.join(HERE, 'collector.py')
+const ASSETS_DIR = path.join(HERE, 'assets')
+const ASSET_NAME = /^[a-z0-9-]{1,32}\.png$/
 
 const ROUTES = {
   cards: '/agent-console/cards',
   session: '/agent-console/session',
   send: '/agent-console/send',
   job: '/agent-console/job',
+  asset: '/agent-console/asset',
 }
 
 const CACHE_MS = 1500
@@ -541,6 +545,33 @@ export function apply(ctx) {
         const job = jobs.get(url.searchParams.get('id') ?? '')
         if (!job) return send(res, 404, { error: 'unknown job' })
         send(res, 200, jobView(job))
+      },
+    }),
+  )
+
+  // Official app icons bundled in assets/ (extracted from the installed apps).
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: ROUTES.asset,
+      handler: async (req, res) => {
+        if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' })
+        const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+        const name = url.searchParams.get('name') ?? ''
+        if (!ASSET_NAME.test(name)) return send(res, 400, { error: 'bad asset name' })
+        const file = path.join(ASSETS_DIR, name)
+        if (!file.startsWith(ASSETS_DIR + path.sep)) return send(res, 403, { error: 'forbidden' })
+        try {
+          const data = await readFile(file)
+          res.writeHead(200, {
+            'content-type': 'image/png',
+            'cache-control': 'public, max-age=3600',
+            'content-length': data.length,
+          })
+          res.end(data)
+        } catch {
+          send(res, 404, { error: 'asset not found' })
+        }
       },
     }),
   )

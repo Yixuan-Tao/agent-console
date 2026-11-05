@@ -161,11 +161,13 @@ function walk(node, fn, depth = 0) {
 }
 let stations = 0
 let svgs = 0
+let images = 0
 walk(officeTree, (node) => {
+  if (node.type === 'img') images += 1
   if (node.type === 'button' && typeof node.props?.onClick === 'function') stations += 1
   if (node.type === 'svg') svgs += 1
 })
-console.log('interactive stations:', stations, '| svg nodes:', svgs)
+console.log('interactive stations:', stations, '| svg nodes:', svgs, '| official icon imgs:', images)
 
 // Each station's click handler must be callable (it opens the workspace).
 let opened = 0

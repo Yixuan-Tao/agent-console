@@ -17,7 +17,8 @@
     "send_ui.ps1",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "assets/*.png"
   ],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },

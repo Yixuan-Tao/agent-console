@@ -13,8 +13,27 @@
   - Codex：`codex queue --thread <id> --message`（追加到该会话队列）
   - WorkBuddy：`codebuddy -p`（在该会话目录新起一次 CLI 运行）
   - Grok Bot / Marvis：窗口自动化（聚焦窗口 → 粘贴 → 回车）
+- **官方形象**：每个 Agent 的工位使用该应用自带的官方图标（从本机安装包提取，非重绘、非第三方图库）。
 - **自动发现更多 Agent**：扫描机器上的其它 AI Agent 应用，以「已发现」工位列出安装位置/数据目录/运行状态（暂无会话与下发，补适配器后升级为完整卡片）。
 - **只读采集**：SQLite 全部 `mode=ro`，不修改任何应用数据。
+
+## 官方图标
+
+`assets/*.png` 里的形象全部来自本机已安装应用的官方资源，脚本 `tools/extract-icons.ps1`（工作区里，不在本仓库）用 `PrivateExtractIcons` 从各 exe 提取 256×256 图标：
+
+| 文件 | 来源 |
+|---|---|
+| `codex.png` | ChatGPT / Codex 应用图标 |
+| `grokbot.png` | Grok Bot 应用图标 |
+| `marvis.png` | Marvis 安装目录 `resources/icons/icon-original.png` |
+| `workbuddy.png` | WorkBuddy 应用图标 |
+| `dsh.png` | DeepSeek Harness 应用图标 |
+| `copilot.png` | Microsoft Copilot 应用图标 |
+| `gemini.png` | Google Gemini 应用图标 |
+
+Host 通过 `GET /agent-console/asset?name=<app>.png` 提供，带文件名白名单，不允许路径穿越；客户端 `onError` 时回退到内置卡通形象。
+
+说明：这些图标是各自厂商的商标/版权素材，这里仅用于**标识对应应用**（nominative use）。如果权利人要求，删除 `assets/` 下对应文件即可，界面会自动回退到内置形象。
 
 ## 自动发现
 
