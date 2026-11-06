@@ -241,7 +241,8 @@ def _mcp_result_text(result) -> str:
 
 
 def _event_at(ms):
-    return (ms / 1000) if isinstance(ms, (int, float)) and ms > 1e11 else ms
+    """Projection timestamps are already epoch milliseconds; never rescale them."""
+    return ms
 
 
 def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:

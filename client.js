@@ -221,7 +221,19 @@ window.__ModuleLoader__.load({
 
     const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
 
-    function relTime(ms, t) {
+    /** Accept epoch ms, epoch seconds or an ISO string; always return epoch ms. */
+    function toMs(value) {
+      if (value === null || value === undefined) return null
+      if (typeof value === 'number') {
+        if (!Number.isFinite(value) || value <= 0) return null
+        return value < 1e11 ? value * 1000 : value
+      }
+      const parsed = Date.parse(String(value))
+      return Number.isNaN(parsed) ? null : parsed
+    }
+
+    function relTime(value, t) {
+      const ms = toMs(value)
       if (!ms) return t('none')
       const diff = Date.now() - ms
       if (diff < 45_000) return '刚刚'
@@ -840,7 +852,7 @@ window.__ModuleLoader__.load({
           h('span', { style: { fontWeight: 600, color } }, label),
           item.phase ? h('span', null, `· ${item.phase}`) : null,
           h('span', { style: { flex: 1 } }),
-          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+          item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
         h('div', { style: { fontSize: 12, lineHeight: '19px', color: TOKENS.text } }, renderMarkdown(item.text)),
       )
@@ -856,7 +868,7 @@ window.__ModuleLoader__.load({
           item.durationMs ? h('span', null, `${item.durationMs} ms`) : null,
           item.cwd ? h('span', { style: { fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 } }, item.cwd) : null,
           h('span', { style: { flex: 1 } }),
-          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+          item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
         h('div', null, h('div', { style: blockLabel }, t('event.cmd')), h('pre', { style: CODE_STYLE }, h('code', null, item.command || ''))),
         h('details', null,
@@ -880,7 +892,7 @@ window.__ModuleLoader__.load({
           item.status ? pill(item.status, item.status === 'completed' || item.status === 'failed' ? (item.status === 'failed' ? TOKENS.err : TOKENS.ok) : TOKENS.sub) : null,
           item.durationMs ? h('span', null, `${item.durationMs} ms`) : null,
           h('span', { style: { flex: 1 } }),
-          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+          item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
         payload
           ? h('details', null,
@@ -928,7 +940,7 @@ window.__ModuleLoader__.load({
           pill(`${changes.length} ${t('event.filesUnit')}`, TOKENS.sub),
           item.status ? pill(item.status, TOKENS.sub) : null,
           h('span', { style: { flex: 1 } }),
-          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+          item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
         ...changes.map((change, index) => h('div', { key: index, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } },
@@ -961,7 +973,7 @@ window.__ModuleLoader__.load({
         h('div', { style: rowHeader },
           h('span', { style: { fontWeight: 600, color: TOKENS.text } }, t('event.search')),
           h('span', { style: { flex: 1 } }),
-          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+          item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
         ...(item.queries ?? []).map((query, index) => h('div', {
           key: index,
@@ -993,7 +1005,7 @@ window.__ModuleLoader__.load({
         h('span', { style: { opacity: 0.7 } }, '·'),
         h('span', null, label),
         h('span', { style: { flex: 1 } }),
-        item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+        item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
       )
     }
 

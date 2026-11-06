@@ -20,7 +20,7 @@ const marker = "    return {\n      inject: ['slots', 'locale'],"
 if (!source.includes(marker)) throw new Error('factory return marker not found')
 source = source.replace(
   marker,
-  '    __acTest = { OfficeView, Station, Mascot, Panel, DiscoveryInfo, EventRow }\n' + marker,
+  '    __acTest = { OfficeView, Station, Mascot, Panel, DiscoveryInfo, EventRow, relTime }\n' + marker,
 )
 
 function makeReact() {
@@ -231,5 +231,17 @@ for (const sample of eventSamples) {
   console.log('  event card', sample.kind, '->', nodes, 'nodes')
 }
 console.log('event cards:', eventSamples.length, '| tables rendered:', tables, '| code blocks:', pres)
+
+// Timestamp units: ms, epoch-seconds and ISO must all read the same.
+const nowMs = Date.now()
+const labels = {
+  ms: components.relTime(nowMs, t),
+  seconds: components.relTime(Math.floor(nowMs / 1000), t),
+  iso: components.relTime(new Date(nowMs).toISOString(), t),
+}
+console.log('relative time:', JSON.stringify(labels))
+if (!Object.values(labels).every((label) => label === '刚刚')) {
+  throw new Error(`timestamp normalization failed: ${JSON.stringify(labels)}`)
+}
 
 console.log('SMOKE OK')
