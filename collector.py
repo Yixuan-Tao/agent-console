@@ -253,18 +253,28 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
     the panel can render commands, MCP calls, diffs and markdown like the app does.
     """
     items: list[dict] = []
+    turn_ms: dict[str, int] = {}
     try:
         conn = codex_history_connection()
         try:
             rows = list(conn.execute(
-                "select item_type, item_json, created_at_ms from thread_items "
+                "select item_type, item_json, created_at_ms, turn_id from thread_items "
                 "where thread_id=? order by rollout_ordinal desc limit 400",
                 (thread_id,)))
+            try:
+                for turn in conn.execute(
+                    "select turn_id, duration_ms from thread_turns where thread_id=?", (thread_id,)
+                ):
+                    if turn["duration_ms"] is not None:
+                        turn_ms[str(turn["turn_id"])] = int(turn["duration_ms"])
+            except Exception:
+                turn_ms = {}
         finally:
             conn.close()
     except Exception as exc:
         ERRORS.append({"app": "codex", "message": f"thread_items: {exc}"})
         return []
+    seen_turns: set[str] = set()
     for row in reversed(rows):
         try:
             payload = json.loads(row["item_json"] or "{}")
@@ -289,6 +299,11 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
                     "role": "assistant", "kind": "message", "text": clip(text, 12000),
                     "at": at, "phase": payload.get("phase") or "",
                 }
+                turn_id = str(row["turn_id"] or "")
+                # One "用时 N" marker per turn, on its first assistant message.
+                if turn_id and turn_id in turn_ms and turn_id not in seen_turns:
+                    found["turnMs"] = turn_ms[turn_id]
+                    seen_turns.add(turn_id)
         elif kind == "commandExecution":
             found = {
                 "role": "assistant", "kind": "command",

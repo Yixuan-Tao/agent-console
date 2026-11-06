@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
     }
     const POLL_MS = 5000
     const JOB_POLL_MS = 1200
+    const BUILD = 'v0.4.0'
 
     const DICT = {
       zh: {
@@ -673,32 +674,42 @@ window.__ModuleLoader__.load({
     function renderInline(text, keyPrefix) {
       if (!text) return null
       const out = []
-      const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\n]+\))/g
+      const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(_[^_\n]+_)|(!?\[[^\]\n]*\]\([^)\n]+\))|(\$[^$\n]+\$)/g
       let last = 0
       let match
       let index = 0
+      const codeStyle = {
+        fontFamily: MONO, fontSize: '0.94em', padding: '0 4px', borderRadius: 4,
+        background: TOKENS.card2, border: `1px solid ${TOKENS.border}`,
+      }
       while ((match = re.exec(text)) !== null) {
         if (match.index > last) out.push(text.slice(last, match.index))
         const token = match[0]
         const key = `${keyPrefix}-${index++}`
         if (token.startsWith('`')) {
-          out.push(h('code', {
-            key,
-            style: {
-              fontFamily: MONO, fontSize: '0.94em', padding: '0 4px', borderRadius: 4,
-              background: TOKENS.card2, border: `1px solid ${TOKENS.border}`,
-            },
-          }, token.slice(1, -1)))
-        } else if (token.startsWith('**')) {
+          out.push(h('code', { key, style: codeStyle }, token.slice(1, -1)))
+        } else if (token.startsWith('**') || token.startsWith('__')) {
           out.push(h('strong', { key }, token.slice(2, -2)))
-        } else if (token.startsWith('*')) {
+        } else if (token.startsWith('~~')) {
+          out.push(h('del', { key, style: { opacity: 0.7 } }, token.slice(2, -2)))
+        } else if (token.startsWith('$')) {
+          out.push(h('code', { key, style: { ...codeStyle, color: TOKENS.warn } }, token.slice(1, -1)))
+        } else if (token.startsWith('*') || token.startsWith('_')) {
           out.push(h('em', { key }, token.slice(1, -1)))
         } else {
-          const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token)
-          out.push(h('a', {
-            key, href: link[2], target: '_blank', rel: 'noreferrer',
-            style: { color: TOKENS.brand, textDecoration: 'none' },
-          }, link[1]))
+          const link = /^(!?)\[([^\]]*)\]\(([^)]+)\)$/.exec(token)
+          const href = (link[3] || '').replace(/^<|>$/g, '')
+          if (link[1]) {
+            out.push(h('a', {
+              key, href, target: '_blank', rel: 'noreferrer',
+              style: { color: TOKENS.brand, textDecoration: 'none' },
+            }, `🖼 ${link[2] || '图片'}`))
+          } else {
+            out.push(h('a', {
+              key, href, target: '_blank', rel: 'noreferrer',
+              style: { color: TOKENS.brand, textDecoration: 'none' },
+            }, link[2]))
+          }
         }
         last = match.index + token.length
       }
@@ -706,25 +717,62 @@ window.__ModuleLoader__.load({
       return out
     }
 
-    function renderTable(rows, keyPrefix) {
+    function renderTable(rows, separator, keyPrefix) {
       const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
       const header = cells(rows[0])
       const body = rows.slice(1).map(cells)
+      const aligns = cells(separator || '').map((cell) => {
+        const left = cell.startsWith(':')
+        const right = cell.endsWith(':')
+        return left && right ? 'center' : right ? 'right' : 'left'
+      })
+      const alignOf = (index) => aligns[index] || 'left'
       const cellStyle = { padding: '4px 8px', borderBottom: `1px solid ${TOKENS.border}`, verticalAlign: 'top' }
       return h('div', { key: keyPrefix, style: { overflowX: 'auto', margin: '4px 0' } },
         h('table', { style: { borderCollapse: 'collapse', fontSize: 11.5, minWidth: '60%' } },
           h('thead', null, h('tr', null, header.map((cell, index) => h('th', {
             key: index,
             style: {
-              ...cellStyle, textAlign: 'left', color: TOKENS.sub,
+              ...cellStyle, textAlign: alignOf(index), color: TOKENS.sub,
               fontWeight: 600, borderBottom: `1px solid ${TOKENS.border2}`,
             },
           }, renderInline(cell, `${keyPrefix}-h${index}`))))),
           h('tbody', null, body.map((row, rowIndex) => h('tr', { key: rowIndex },
-            row.map((cell, cellIndex) => h('td', { key: cellIndex, style: cellStyle },
-              renderInline(cell, `${keyPrefix}-${rowIndex}-${cellIndex}`)))))),
+            row.map((cell, cellIndex) => h('td', {
+              key: cellIndex, style: { ...cellStyle, textAlign: alignOf(cellIndex) },
+            }, renderInline(cell, `${keyPrefix}-${rowIndex}-${cellIndex}`)))))),
         ),
       )
+    }
+
+    function renderList(items, ordered, keyPrefix) {
+      const roots = []
+      let current = null
+      for (const item of items) {
+        if (!current || item.indent <= current.indent) {
+          current = { ...item, children: [] }
+          roots.push(current)
+        } else {
+          current.children.push(item)
+        }
+      }
+      const marker = (task) => (task === null
+        ? null
+        : h('span', { style: { marginRight: 5, color: task ? TOKENS.ok : TOKENS.sub } }, task ? '☑' : '☐'))
+      return h(ordered ? 'ol' : 'ul', {
+        key: keyPrefix,
+        style: { margin: '2px 0', paddingLeft: ordered ? 20 : 18 },
+      },
+        roots.map((item, index) => h('li', { key: index, style: { marginBottom: 2 } },
+          marker(item.task),
+          renderInline(item.text, `${keyPrefix}-${index}`),
+          item.children.length
+            ? h('ul', { style: { margin: '2px 0', paddingLeft: 16 } },
+              item.children.map((child, childIndex) => h('li', { key: childIndex },
+                marker(child.task),
+                renderInline(child.text, `${keyPrefix}-${index}-${childIndex}`))))
+            : null,
+        )))
     }
 
     /** Minimal markdown renderer: headings, lists, quotes, tables, fences, inline marks. */
@@ -738,13 +786,40 @@ window.__ModuleLoader__.load({
       while (i < lines.length) {
         const line = lines[i]
         if (!line.trim()) { i += 1; continue }
+        if (/^\s*\$\$/.test(line)) {
+          const buffer = []
+          const rest = line.replace(/^\s*\$\$/, '')
+          if (rest.trim().endsWith('$$')) {
+            buffer.push(rest.trim().replace(/\$\$$/, ''))
+            i += 1
+          } else {
+            if (rest.trim()) buffer.push(rest.trim())
+            i += 1
+            while (i < lines.length && !/^\s*\$\$/.test(lines[i])) { buffer.push(lines[i]); i += 1 }
+            i += 1
+          }
+          push(h('pre', { key: `b${key++}`, style: CODE_STYLE }, h('code', null, buffer.join('\n'))))
+          continue
+        }
         const fence = /^\s*```(\w*)\s*$/.exec(line)
         if (fence) {
+          const lang = (fence[1] || '').toLowerCase()
           i += 1
           const buffer = []
           while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buffer.push(lines[i]); i += 1 }
           i += 1
-          push(h('pre', { key: `b${key++}`, style: CODE_STYLE }, h('code', null, buffer.join('\n'))))
+          const body = buffer.join('\n')
+          if (lang === 'mermaid') {
+            push(h('div', { key: `b${key++}`, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+              h('div', { style: blockLabel }, 'mermaid 图（源码）'),
+              h('pre', { style: CODE_STYLE }, h('code', null, body))))
+          } else if (lang) {
+            push(h('div', { key: `b${key++}`, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+              h('div', { style: blockLabel }, lang),
+              h('pre', { style: CODE_STYLE }, h('code', null, body))))
+          } else {
+            push(h('pre', { key: `b${key++}`, style: CODE_STYLE }, h('code', null, body)))
+          }
           continue
         }
         const heading = /^(#{1,6})\s+(.*)$/.exec(line)
@@ -760,11 +835,12 @@ window.__ModuleLoader__.load({
         }
         if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
           const rows = []
+          const separator = lines[i + 1]
           while (i < lines.length && /^\s*\|/.test(lines[i])) {
             if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i])) rows.push(lines[i])
             i += 1
           }
-          if (rows.length) push(renderTable(rows, `t${key++}`))
+          if (rows.length) push(renderTable(rows, separator, `t${key++}`))
           continue
         }
         if (/^\s*([-*_])\s*\1\s*\1?\s*$/.test(line)) {
@@ -793,23 +869,33 @@ window.__ModuleLoader__.load({
         if (/^\s*[-*+]\s+/.test(line)) {
           const items = []
           while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-            items.push(lines[i].replace(/^\s*[-*+]\s+/, ''))
+            const raw = lines[i]
+            const indent = raw.match(/^\s*/)[0].length
+            let body = raw.replace(/^\s*[-*+]\s+/, '')
+            let task = null
+            const checkbox = /^\[([ xX])\]\s*(.*)$/.exec(body)
+            if (checkbox) {
+              task = checkbox[1].toLowerCase() === 'x'
+              body = checkbox[2]
+            }
+            items.push({ indent, text: body, task })
             i += 1
           }
-          push(h('ul', { key: `b${key++}`, style: { margin: '2px 0', paddingLeft: 18 } },
-            items.map((item, index) => h('li', { key: index, style: { marginBottom: 2 } },
-              renderInline(item, `l${key}-${index}`)))))
+          push(renderList(items, false, `l${key++}`))
           continue
         }
         if (/^\s*\d+[.)]\s+/.test(line)) {
           const items = []
           while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
-            items.push(lines[i].replace(/^\s*\d+[.)]\s+/, ''))
+            const raw = lines[i]
+            items.push({
+              indent: raw.match(/^\s*/)[0].length,
+              text: raw.replace(/^\s*\d+[.)]\s+/, ''),
+              task: null,
+            })
             i += 1
           }
-          push(h('ol', { key: `b${key++}`, style: { margin: '2px 0', paddingLeft: 20 } },
-            items.map((item, index) => h('li', { key: index, style: { marginBottom: 2 } },
-              renderInline(item, `o${key}-${index}`)))))
+          push(renderList(items, true, `o${key++}`))
           continue
         }
         const paragraph = []
@@ -851,6 +937,7 @@ window.__ModuleLoader__.load({
         h('div', { style: rowHeader },
           h('span', { style: { fontWeight: 600, color } }, label),
           item.phase ? h('span', null, `· ${item.phase}`) : null,
+          item.turnMs ? pill(`用时 ${Math.round(item.turnMs / 1000)} 秒`, TOKENS.sub) : null,
           h('span', { style: { flex: 1 } }),
           item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
@@ -1523,6 +1610,7 @@ window.__ModuleLoader__.load({
               },
                 h('span', null, t('panel.auto')),
                 snapshot?.host ? h('span', null, `· ${snapshot.host}`) : null,
+                h('span', { style: { marginLeft: 'auto', opacity: 0.7 } }, BUILD),
               ),
             ),
           ),

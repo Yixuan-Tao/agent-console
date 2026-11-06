@@ -8,7 +8,7 @@
 
 - **办公室 / 列表两种总览**：在岗、忙碌、待确认数量一眼可见。
 - **每个 Agent 多会话**：Codex 上百个（含归档与云端），WorkBuddy / Marvis / Grok 各数十个以内。
-- **会话详情**：结构化渲染而不是原文——消息走 Markdown（标题/列表/表格/代码块），命令显示命令+可折叠输出+退出码，MCP 调用显示参数与结果，文件改动显示着色 diff。
+- **会话详情**：结构化渲染而不是原文——消息按 GFM Markdown 渲染（表格/任务列表/删除线/公式/代码块），命令显示命令+可折叠输出+退出码，MCP 调用显示参数与结果，文件改动显示着色 diff，助手消息带「用时 N 秒」。
 - **下发提示词**（两段式确认，先预览再执行）：
   - Codex：`codex queue --thread <id> --message`（追加到该会话队列）
   - WorkBuddy：`codebuddy -p`（在该会话目录新起一次 CLI 运行）
@@ -103,6 +103,9 @@ python -m py_compile collector.py
 
 # 无浏览器渲染烟雾测试（vm + 桩 React，验证组件树可渲染）
 node tools/smoke-client.mjs
+
+# Markdown 渲染测试（表格/任务列表/删除线/公式/对齐）
+node tools/test-markdown.mjs
 ```
 
 设计文档见 [DESIGN.md](DESIGN.md)。
