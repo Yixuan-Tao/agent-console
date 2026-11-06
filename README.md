@@ -8,7 +8,7 @@
 
 - **办公室 / 列表两种总览**：在岗、忙碌、待确认数量一眼可见。
 - **每个 Agent 多会话**：Codex 上百个（含归档与云端），WorkBuddy / Marvis / Grok 各数十个以内。
-- **会话详情**：读取各家本地正文（Codex rollout、Marvis messages、WorkBuddy projects 日志、Grok 最后一条消息）。
+- **会话详情**：结构化渲染而不是原文——消息走 Markdown（标题/列表/表格/代码块），命令显示命令+可折叠输出+退出码，MCP 调用显示参数与结果，文件改动显示着色 diff。
 - **下发提示词**（两段式确认，先预览再执行）：
   - Codex：`codex queue --thread <id> --message`（追加到该会话队列）
   - WorkBuddy：`codebuddy -p`（在该会话目录新起一次 CLI 运行）

@@ -224,19 +224,40 @@ def codex_history_connection():
     return conn
 
 
+def _mcp_result_text(result) -> str:
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return clip(result, 4000)
+    if isinstance(result, dict):
+        parts = []
+        for part in result.get("content") or []:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        if parts:
+            return clip("\n".join(parts), 4000)
+        return clip(json.dumps(result, ensure_ascii=False), 4000)
+    return clip(str(result), 4000)
+
+
+def _event_at(ms):
+    return (ms / 1000) if isinstance(ms, (int, float)) and ms > 1e11 else ms
+
+
 def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
-    """Reconstruct a transcript from the projected item table.
+    """Reconstruct a structured transcript from the projected item table.
 
     This is the fallback for threads whose rollout file was archived or deleted:
-    ~270 local threads still have their items here.
+    ~270 local threads still have their items here. Items keep their own shape so
+    the panel can render commands, MCP calls, diffs and markdown like the app does.
     """
-    items = []
+    items: list[dict] = []
     try:
         conn = codex_history_connection()
         try:
             rows = list(conn.execute(
                 "select item_type, item_json, created_at_ms from thread_items "
-                "where thread_id=? order by rollout_ordinal desc limit 220",
+                "where thread_id=? order by rollout_ordinal desc limit 400",
                 (thread_id,)))
         finally:
             conn.close()
@@ -249,45 +270,95 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
         except Exception:
             continue
         kind = row["item_type"]
-        at = row["created_at_ms"]
-        text = ""
-        role = "assistant"
-        label = kind
+        at = _event_at(row["created_at_ms"])
+        found = None
         if kind == "userMessage":
-            role = "user"
-            parts = []
-            for part in payload.get("content") or []:
-                if isinstance(part, dict) and part.get("text"):
-                    parts.append(str(part["text"]))
-            text = "".join(parts)
+            parts = [
+                str(part.get("text") or "")
+                for part in payload.get("content") or []
+                if isinstance(part, dict) and part.get("text")
+            ]
+            text = "\n".join(parts)
+            if text.strip():
+                found = {"role": "user", "kind": "message", "text": clip(text, 8000), "at": at}
         elif kind == "agentMessage":
             text = payload.get("text") or ""
+            if text.strip():
+                found = {
+                    "role": "assistant", "kind": "message", "text": clip(text, 12000),
+                    "at": at, "phase": payload.get("phase") or "",
+                }
         elif kind == "commandExecution":
-            text = payload.get("command") or ""
+            found = {
+                "role": "assistant", "kind": "command",
+                "command": clip(payload.get("command") or "", 8000),
+                "output": clip(payload.get("aggregatedOutput") or "", 8000),
+                "status": payload.get("status") or "",
+                "exitCode": payload.get("exitCode"),
+                "durationMs": payload.get("durationMs"),
+                "cwd": payload.get("cwd") or "",
+                "at": at,
+            }
         elif kind == "mcpToolCall":
-            text = f"{payload.get('server')}.{payload.get('tool')} {json.dumps(payload.get('arguments') or {}, ensure_ascii=False)}"
+            found = {
+                "role": "assistant", "kind": "mcp",
+                "server": payload.get("server") or "",
+                "tool": payload.get("tool") or "",
+                "status": payload.get("status") or "",
+                "arguments": payload.get("arguments") or {},
+                "result": _mcp_result_text(payload.get("result")),
+                "error": clip(payload.get("error") or "", 1000),
+                "durationMs": payload.get("durationMs"),
+                "at": at,
+            }
         elif kind == "fileChange":
-            paths = [c.get("path") for c in payload.get("changes") or [] if isinstance(c, dict)]
-            text = "改动文件: " + ", ".join(p for p in paths if p)
+            changes = []
+            for change in payload.get("changes") or []:
+                if not isinstance(change, dict):
+                    continue
+                change_kind = change.get("kind")
+                if isinstance(change_kind, dict):
+                    change_kind = change_kind.get("type")
+                changes.append({
+                    "path": change.get("path") or "",
+                    "changeType": str(change_kind or ""),
+                    "diff": clip(change.get("diff") or "", 8000),
+                })
+            if changes:
+                found = {
+                    "role": "assistant", "kind": "file", "changes": changes,
+                    "status": payload.get("status") or "", "at": at,
+                }
         elif kind == "webSearch":
-            text = "搜索: " + " | ".join(payload.get("queries") or [])
+            action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+            queries = [q for q in (action.get("queries") or []) if q]
+            if not queries and action.get("query"):
+                queries = [action.get("query")]
+            if not queries and payload.get("query"):
+                queries = [payload.get("query")]
+            results = []
+            for result in payload.get("results") or []:
+                if isinstance(result, dict):
+                    results.append({
+                        "domain": result.get("domain") or "",
+                        "snippet": clip(result.get("snippet") or "", 500),
+                    })
+            found = {"role": "assistant", "kind": "search", "queries": queries,
+                     "results": results[:6], "at": at}
         elif kind == "plan":
             text = payload.get("text") or ""
-        elif kind == "imageView":
-            text = "查看图片"
-        elif kind == "subAgentActivity":
-            text = "子代理活动"
-        elif kind == "contextCompaction":
-            text = "上下文压缩"
-        else:
-            text = ""
-        if not text.strip():
-            continue
-        items.append({
-            "role": role, "kind": label,
-            "text": clip(text, 1500),
-            "at": (at / 1000) if isinstance(at, (int, float)) and at > 1e11 else at,
-        })
+            if text.strip():
+                found = {"role": "assistant", "kind": "message", "text": clip(text, 12000),
+                         "at": at, "phase": "plan"}
+        elif kind in ("imageView", "subAgentActivity", "contextCompaction"):
+            label = {
+                "imageView": "查看图片",
+                "subAgentActivity": "子代理活动",
+                "contextCompaction": "上下文压缩",
+            }[kind]
+            found = {"role": "system", "kind": "event", "text": label, "at": at}
+        if found:
+            items.append(found)
     return items[-limit:]
 
 
@@ -855,19 +926,30 @@ def detail_codex(session_id: str) -> dict:
     if not rollout or not os.path.exists(rollout):
         rollout, compressed = find_rollout(session_id)
 
-    events: list[dict] = []
-    note = ""
+    baseline = {
+        "app": "codex", "id": session_id,
+        "title": clip(title or "(会话)", 120), "cwd": strip_extended_path(cwd),
+        "status": "", "source": source,
+    }
+
+    # Structured items first: they carry command output, MCP results and diffs,
+    # which the panel renders as cards instead of raw text.
+    structured = codex_item_events(session_id)
+    if structured:
+        baseline["note"] = "来自 thread_history 投影（结构化条目）"
+        baseline["events"] = structured[-40:]
+        return baseline
 
     if compressed and rollout and os.path.exists(rollout):
         return {
-            "app": "codex", "id": session_id,
-            "title": clip(title or "(会话)", 120), "cwd": strip_extended_path(cwd),
-            "status": "", "events": [], "source": source,
+            **baseline, "events": [],
             "compressed": True, "path": rollout,
             "compressedBytes": os.path.getsize(rollout),
-            "note": "rollout 已压缩，交由 Host 流式解压读取",
+            "note": "rollout 已压缩且无投影，交由 Host 流式解压读取",
         }
 
+    events: list[dict] = []
+    note = ""
     if rollout and os.path.exists(rollout):
         try:
             for line in tail_lines(rollout)[-400:]:
@@ -896,25 +978,26 @@ def detail_codex(session_id: str) -> dict:
                         role = payload.get("role") or "assistant"
                         if text.strip():
                             events.append(event("system" if role == "developer" else role,
-                                                "message", text, stamp))
+                                                "message", clip(text, 12000), stamp))
                     elif ptype in ("function_call", "custom_tool_call"):
                         raw = payload.get("arguments") or payload.get("input") or ""
-                        events.append(event("assistant", "tool", f"{payload.get('name')} {raw}", stamp))
+                        if not isinstance(raw, str):
+                            raw = json.dumps(raw, ensure_ascii=False)
+                        events.append({
+                            "role": "assistant", "kind": "tool",
+                            "tool": payload.get("name") or "tool",
+                            "input": clip(raw, 8000), "at": stamp,
+                        })
                     elif ptype == "agent_message":
                         text = payload.get("message") or payload.get("text") or ""
                         if text:
-                            events.append(event("assistant", "message", text, stamp))
+                            events.append(event("assistant", "message", clip(text, 12000), stamp))
                 elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete", "turn_aborted"):
                     events.append(event("system", "event", payload.get("type"), stamp))
         except Exception as exc:
             ERRORS.append({"app": "codex", "message": f"rollout: {exc}"})
         if events:
             note = "来自 rollout 事件流（尾部 400 行）"
-
-    if not events:
-        events = codex_item_events(session_id)
-        if events:
-            note = "该会话的 rollout 已不在本地；正文由 thread_history 投影恢复"
 
     if not events:
         text = (first_user or preview or "").strip()
@@ -926,11 +1009,9 @@ def detail_codex(session_id: str) -> dict:
         else:
             note = "本地没有该会话的正文记录（rollout 与投影都不存在）"
 
-    return {
-        "app": "codex", "id": session_id,
-        "title": clip(title or "(会话)", 120), "cwd": strip_extended_path(cwd),
-        "status": "", "source": source, "note": note, "events": events[-40:],
-    }
+    baseline["note"] = note
+    baseline["events"] = events[-40:]
+    return baseline
 
 
 
@@ -955,9 +1036,15 @@ def detail_marvis(session_id: str) -> dict:
                 for row in reversed(rows):
                     role = (row["role"] or "assistant").lower()
                     text = row["content"] or ""
-                    if row["tool_name"]:
-                        text = f"[{row['tool_name']}] {text}"
-                    events.append(event(role, "message", text, row["created_at"]))
+                    at = row["created_at"]
+                    if role == "tool" or row["tool_name"]:
+                        events.append({
+                            "role": "assistant", "kind": "tool",
+                            "tool": row["tool_name"] or "tool",
+                            "output": clip(text, 8000), "at": at,
+                        })
+                    else:
+                        events.append(event(role, "message", clip(text, 8000), at))
             if "agent_activities" in tables:
                 for row in conn.execute(
                     "select agent_name, content, status, activity_time from agent_activities "

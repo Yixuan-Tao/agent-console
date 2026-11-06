@@ -20,7 +20,7 @@ const marker = "    return {\n      inject: ['slots', 'locale'],"
 if (!source.includes(marker)) throw new Error('factory return marker not found')
 source = source.replace(
   marker,
-  '    __acTest = { OfficeView, Station, Mascot, Panel, DiscoveryInfo }\n' + marker,
+  '    __acTest = { OfficeView, Station, Mascot, Panel, DiscoveryInfo, EventRow }\n' + marker,
 )
 
 function makeReact() {
@@ -194,5 +194,42 @@ const info = components.DiscoveryInfo({ agent: discoveredAgent, t })
 const infoText = JSON.stringify(info)
 console.log('DiscoveryInfo rendered:', info.type === 'div',
   '| has install/data:', infoText.includes('discovered.install') && infoText.includes('discovered.data'))
+
+// Structured event cards: markdown, command, MCP, diff, search, system rows.
+const eventSamples = [
+  {
+    kind: 'message', role: 'assistant',
+    text: '# 标题\n\n**粗体** 与 `code`\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```js\nconsole.log(1)\n```',
+    at: Date.now(),
+  },
+  {
+    kind: 'command', command: 'Get-ChildItem', output: 'file1\nfile2',
+    status: 'completed', exitCode: 0, durationMs: 42, cwd: 'C:\\demo', at: Date.now(),
+  },
+  {
+    kind: 'mcp', server: 'node_repl', tool: 'js', status: 'completed',
+    arguments: { code: '1+1' }, result: '2', at: Date.now(),
+  },
+  {
+    kind: 'file', status: 'completed', at: Date.now(),
+    changes: [{ path: 'a.md', changeType: 'update', diff: '@@ -1 +1 @@\n-a\n+b' }],
+  },
+  { kind: 'search', queries: ['codex'], results: [{ domain: 'a.com', snippet: 's' }], at: Date.now() },
+  { kind: 'event', text: 'task_started', at: Date.now() },
+]
+let tables = 0
+let pres = 0
+for (const sample of eventSamples) {
+  const tree = components.EventRow({ item: sample, t })
+  if (!tree) throw new Error(`event render returned nothing for ${sample.kind}`)
+  let nodes = 0
+  walk(tree, (node) => {
+    nodes += 1
+    if (node.type === 'table') tables += 1
+    if (node.type === 'pre') pres += 1
+  })
+  console.log('  event card', sample.kind, '->', nodes, 'nodes')
+}
+console.log('event cards:', eventSamples.length, '| tables rendered:', tables, '| code blocks:', pres)
 
 console.log('SMOKE OK')

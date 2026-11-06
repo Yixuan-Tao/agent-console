@@ -80,6 +80,22 @@ window.__ModuleLoader__.load({
         'role.assistant': '助手',
         'role.system': '系统',
         'role.tool': '工具',
+        'event.command': '命令',
+        'event.cmd': '命令',
+        'event.output': '输出',
+        'event.noOutput': '（无输出）',
+        'event.tool': '工具',
+        'event.input': '输入',
+        'event.args': '参数',
+        'event.result': '结果',
+        'event.files': '文件改动',
+        'event.filesUnit': '个文件',
+        'event.added': '新增',
+        'event.deleted': '删除',
+        'event.modified': '修改',
+        'event.diff': '差异',
+        'event.search': '搜索',
+        'event.results': '结果',
         'send.title': '下发提示词',
         'send.placeholder': '输入要发给这个 Agent 的提示词…',
         'send.button': '发送',
@@ -153,6 +169,22 @@ window.__ModuleLoader__.load({
         'role.assistant': 'Assistant',
         'role.system': 'System',
         'role.tool': 'Tool',
+        'event.command': 'Command',
+        'event.cmd': 'Command',
+        'event.output': 'Output',
+        'event.noOutput': '(no output)',
+        'event.tool': 'Tool',
+        'event.input': 'Input',
+        'event.args': 'Arguments',
+        'event.result': 'Result',
+        'event.files': 'File changes',
+        'event.filesUnit': 'files',
+        'event.added': 'Added',
+        'event.deleted': 'Deleted',
+        'event.modified': 'Modified',
+        'event.diff': 'Diff',
+        'event.search': 'Search',
+        'event.results': 'Results',
         'send.title': 'Send a prompt',
         'send.placeholder': 'Prompt to send to this agent…',
         'send.button': 'Send',
@@ -617,35 +649,364 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------- detail
-    function EventRow({ item, t }) {
-      const role = item.role || 'system'
-      const color = role === 'user' ? TOKENS.brand
-        : role === 'assistant' ? TOKENS.text
-          : role === 'tool' ? TOKENS.warn
-            : TOKENS.sub
+    // ---------------------------------------------------------------- event rendering
+    const CODE_STYLE = {
+      margin: 0, padding: '8px 10px', borderRadius: 8,
+      background: TOKENS.card, border: `1px solid ${TOKENS.border}`,
+      fontFamily: MONO, fontSize: 11.5, lineHeight: '17px',
+      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+      maxHeight: 280, overflow: 'auto', color: TOKENS.text,
+    }
+
+    function renderInline(text, keyPrefix) {
+      if (!text) return null
+      const out = []
+      const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\n]+\))/g
+      let last = 0
+      let match
+      let index = 0
+      while ((match = re.exec(text)) !== null) {
+        if (match.index > last) out.push(text.slice(last, match.index))
+        const token = match[0]
+        const key = `${keyPrefix}-${index++}`
+        if (token.startsWith('`')) {
+          out.push(h('code', {
+            key,
+            style: {
+              fontFamily: MONO, fontSize: '0.94em', padding: '0 4px', borderRadius: 4,
+              background: TOKENS.card2, border: `1px solid ${TOKENS.border}`,
+            },
+          }, token.slice(1, -1)))
+        } else if (token.startsWith('**')) {
+          out.push(h('strong', { key }, token.slice(2, -2)))
+        } else if (token.startsWith('*')) {
+          out.push(h('em', { key }, token.slice(1, -1)))
+        } else {
+          const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token)
+          out.push(h('a', {
+            key, href: link[2], target: '_blank', rel: 'noreferrer',
+            style: { color: TOKENS.brand, textDecoration: 'none' },
+          }, link[1]))
+        }
+        last = match.index + token.length
+      }
+      if (last < text.length) out.push(text.slice(last))
+      return out
+    }
+
+    function renderTable(rows, keyPrefix) {
+      const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+      const header = cells(rows[0])
+      const body = rows.slice(1).map(cells)
+      const cellStyle = { padding: '4px 8px', borderBottom: `1px solid ${TOKENS.border}`, verticalAlign: 'top' }
+      return h('div', { key: keyPrefix, style: { overflowX: 'auto', margin: '4px 0' } },
+        h('table', { style: { borderCollapse: 'collapse', fontSize: 11.5, minWidth: '60%' } },
+          h('thead', null, h('tr', null, header.map((cell, index) => h('th', {
+            key: index,
+            style: {
+              ...cellStyle, textAlign: 'left', color: TOKENS.sub,
+              fontWeight: 600, borderBottom: `1px solid ${TOKENS.border2}`,
+            },
+          }, renderInline(cell, `${keyPrefix}-h${index}`))))),
+          h('tbody', null, body.map((row, rowIndex) => h('tr', { key: rowIndex },
+            row.map((cell, cellIndex) => h('td', { key: cellIndex, style: cellStyle },
+              renderInline(cell, `${keyPrefix}-${rowIndex}-${cellIndex}`)))))),
+        ),
+      )
+    }
+
+    /** Minimal markdown renderer: headings, lists, quotes, tables, fences, inline marks. */
+    function renderMarkdown(text) {
+      if (!text) return null
+      const lines = String(text).replace(/\r\n/g, '\n').split('\n')
+      const blocks = []
+      let i = 0
+      let key = 0
+      const push = (node) => blocks.push(node)
+      while (i < lines.length) {
+        const line = lines[i]
+        if (!line.trim()) { i += 1; continue }
+        const fence = /^\s*```(\w*)\s*$/.exec(line)
+        if (fence) {
+          i += 1
+          const buffer = []
+          while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buffer.push(lines[i]); i += 1 }
+          i += 1
+          push(h('pre', { key: `b${key++}`, style: CODE_STYLE }, h('code', null, buffer.join('\n'))))
+          continue
+        }
+        const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+        if (heading) {
+          const level = heading[1].length
+          const size = level <= 1 ? 15 : level === 2 ? 14 : level === 3 ? 13 : 12.5
+          push(h('div', {
+            key: `b${key++}`,
+            style: { fontSize: size, fontWeight: 700, marginTop: 6, lineHeight: '20px' },
+          }, renderInline(heading[2], `h${key}`)))
+          i += 1
+          continue
+        }
+        if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+          const rows = []
+          while (i < lines.length && /^\s*\|/.test(lines[i])) {
+            if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i])) rows.push(lines[i])
+            i += 1
+          }
+          if (rows.length) push(renderTable(rows, `t${key++}`))
+          continue
+        }
+        if (/^\s*([-*_])\s*\1\s*\1?\s*$/.test(line)) {
+          push(h('hr', {
+            key: `b${key++}`,
+            style: { border: 'none', borderTop: `1px solid ${TOKENS.border}`, margin: '8px 0' },
+          }))
+          i += 1
+          continue
+        }
+        if (/^\s*>/.test(line)) {
+          const quoted = []
+          while (i < lines.length && /^\s*>/.test(lines[i])) {
+            quoted.push(lines[i].replace(/^\s*>\s?/, ''))
+            i += 1
+          }
+          push(h('blockquote', {
+            key: `b${key++}`,
+            style: {
+              margin: '4px 0', padding: '2px 0 2px 10px',
+              borderLeft: `2px solid ${TOKENS.border2}`, color: TOKENS.sub,
+            },
+          }, renderMarkdown(quoted.join('\n'))))
+          continue
+        }
+        if (/^\s*[-*+]\s+/.test(line)) {
+          const items = []
+          while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\s*[-*+]\s+/, ''))
+            i += 1
+          }
+          push(h('ul', { key: `b${key++}`, style: { margin: '2px 0', paddingLeft: 18 } },
+            items.map((item, index) => h('li', { key: index, style: { marginBottom: 2 } },
+              renderInline(item, `l${key}-${index}`)))))
+          continue
+        }
+        if (/^\s*\d+[.)]\s+/.test(line)) {
+          const items = []
+          while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\s*\d+[.)]\s+/, ''))
+            i += 1
+          }
+          push(h('ol', { key: `b${key++}`, style: { margin: '2px 0', paddingLeft: 20 } },
+            items.map((item, index) => h('li', { key: index, style: { marginBottom: 2 } },
+              renderInline(item, `o${key}-${index}`)))))
+          continue
+        }
+        const paragraph = []
+        while (
+          i < lines.length && lines[i].trim()
+          && !/^\s*```/.test(lines[i]) && !/^(#{1,6})\s/.test(lines[i])
+          && !/^\s*[-*+]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i])
+          && !/^\s*>/.test(lines[i]) && !/^\s*\|/.test(lines[i])
+        ) {
+          paragraph.push(lines[i])
+          i += 1
+        }
+        push(h('div', {
+          key: `b${key++}`,
+          style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '2px 0' },
+        }, renderInline(paragraph.join('\n'), `p${key}`)))
+      }
+      return blocks
+    }
+
+    const rowShell = {
+      display: 'flex', flexDirection: 'column', gap: 6,
+      padding: '8px 10px', borderRadius: 8,
+      background: TOKENS.card2, border: `1px solid ${TOKENS.border}`,
+    }
+    const rowHeader = {
+      display: 'flex', alignItems: 'center', gap: 6,
+      fontSize: 11, color: TOKENS.sub, flexWrap: 'wrap',
+    }
+    const blockLabel = { fontSize: 10.5, color: TOKENS.sub, marginBottom: 2 }
+
+    function MessageRow({ item, t }) {
+      const role = item.role || 'assistant'
+      const color = role === 'user' ? TOKENS.brand : TOKENS.text
       const label = t(`role.${role}`) !== `role.${role}` ? t(`role.${role}`) : role
       return h('div', {
-        style: {
-          display: 'flex', flexDirection: 'column', gap: 3,
-          padding: '8px 10px', borderRadius: 8,
-          background: TOKENS.card2,
-          borderLeft: `2px solid ${color}`,
-        },
+        style: { ...rowShell, borderLeft: `2px solid ${color}` },
       },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: TOKENS.sub } },
+        h('div', { style: rowHeader },
           h('span', { style: { fontWeight: 600, color } }, label),
-          item.kind && item.kind !== 'message' ? h('span', null, `· ${item.kind}`) : null,
+          item.phase ? h('span', null, `· ${item.phase}`) : null,
           h('span', { style: { flex: 1 } }),
           item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
         ),
-        h('div', {
-          style: {
-            fontSize: 12, lineHeight: '19px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            color: TOKENS.text,
-            display: '-webkit-box', WebkitLineClamp: 14, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-          },
-        }, item.text || ''),
+        h('div', { style: { fontSize: 12, lineHeight: '19px', color: TOKENS.text } }, renderMarkdown(item.text)),
       )
+    }
+
+    function CommandRow({ item, t }) {
+      const failed = item.exitCode != null && item.exitCode !== 0
+      const statusText = item.exitCode != null ? `exit ${item.exitCode}` : (item.status || '')
+      return h('div', { style: rowShell },
+        h('div', { style: rowHeader },
+          h('span', { style: { fontWeight: 600, color: failed ? TOKENS.err : TOKENS.text } }, t('event.command')),
+          statusText ? pill(statusText, failed ? TOKENS.err : TOKENS.ok) : null,
+          item.durationMs ? h('span', null, `${item.durationMs} ms`) : null,
+          item.cwd ? h('span', { style: { fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 } }, item.cwd) : null,
+          h('span', { style: { flex: 1 } }),
+          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+        ),
+        h('div', null, h('div', { style: blockLabel }, t('event.cmd')), h('pre', { style: CODE_STYLE }, h('code', null, item.command || ''))),
+        h('details', null,
+          h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, t('event.output')),
+          h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, (item.output || '').trim() || t('event.noOutput'))),
+        ),
+      )
+    }
+
+    function ToolRow({ item, t }) {
+      const isMcp = item.kind === 'mcp'
+      const title = isMcp ? `${item.server}.${item.tool}` : (item.tool || 'tool')
+      const payload = isMcp
+        ? JSON.stringify(item.arguments ?? {}, null, 2)
+        : (item.input || item.output || '')
+      const result = isMcp ? (item.result || '') : (item.output || '')
+      return h('div', { style: rowShell },
+        h('div', { style: rowHeader },
+          pill(isMcp ? 'MCP' : t('event.tool'), isMcp ? TOKENS.brand : TOKENS.sub),
+          h('span', { style: { fontFamily: MONO, color: TOKENS.text, fontSize: 11.5 } }, title),
+          item.status ? pill(item.status, item.status === 'completed' || item.status === 'failed' ? (item.status === 'failed' ? TOKENS.err : TOKENS.ok) : TOKENS.sub) : null,
+          item.durationMs ? h('span', null, `${item.durationMs} ms`) : null,
+          h('span', { style: { flex: 1 } }),
+          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+        ),
+        payload
+          ? h('details', null,
+            h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, isMcp ? t('event.args') : t('event.input')),
+            h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, payload.slice(0, 4000))),
+          )
+          : null,
+        result
+          ? h('details', null,
+            h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, t('event.result')),
+            h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, result.slice(0, 4000))),
+          )
+          : null,
+        item.error ? h('div', { style: { fontSize: 11, color: TOKENS.err } }, item.error) : null,
+      )
+    }
+
+    function DiffLine({ line }) {
+      const added = line.startsWith('+') && !line.startsWith('+++')
+      const removed = line.startsWith('-') && !line.startsWith('---')
+      const hunk = line.startsWith('@@')
+      return h('div', {
+        style: {
+          fontFamily: MONO, fontSize: 11, lineHeight: '16px', whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          color: added ? TOKENS.ok : removed ? TOKENS.err : hunk ? TOKENS.sub : TOKENS.text,
+          background: added
+            ? `color-mix(in srgb, ${TOKENS.ok} 10%, transparent)`
+            : removed ? `color-mix(in srgb, ${TOKENS.err} 10%, transparent)` : 'transparent',
+          padding: '0 4px',
+        },
+      }, line)
+    }
+
+    function FileRow({ item, t }) {
+      const changes = item.changes ?? []
+      const badge = (type) => {
+        const color = type === 'add' ? TOKENS.ok : type === 'delete' ? TOKENS.err : TOKENS.warn
+        const label = type === 'add' ? t('event.added') : type === 'delete' ? t('event.deleted') : t('event.modified')
+        return pill(label, color)
+      }
+      return h('div', { style: rowShell },
+        h('div', { style: rowHeader },
+          h('span', { style: { fontWeight: 600, color: TOKENS.text } }, t('event.files')),
+          pill(`${changes.length} ${t('event.filesUnit')}`, TOKENS.sub),
+          item.status ? pill(item.status, TOKENS.sub) : null,
+          h('span', { style: { flex: 1 } }),
+          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+        ),
+        ...changes.map((change, index) => h('div', { key: index, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } },
+            badge(change.changeType),
+            h('span', {
+              style: {
+                fontFamily: MONO, fontSize: 11, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              },
+              title: change.path,
+            }, change.path),
+          ),
+          change.diff
+            ? h('details', null,
+              h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, t('event.diff')),
+              h('div', {
+                style: {
+                  marginTop: 4, borderRadius: 8, overflow: 'auto', maxHeight: 260,
+                  border: `1px solid ${TOKENS.border}`, background: TOKENS.card, padding: '4px 0',
+                },
+              }, (change.diff || '').split('\n').slice(0, 200).map((line, lineIndex) => h(DiffLine, { key: lineIndex, line }))),
+            )
+            : null,
+        )),
+      )
+    }
+
+    function SearchRow({ item, t }) {
+      return h('div', { style: rowShell },
+        h('div', { style: rowHeader },
+          h('span', { style: { fontWeight: 600, color: TOKENS.text } }, t('event.search')),
+          h('span', { style: { flex: 1 } }),
+          item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+        ),
+        ...(item.queries ?? []).map((query, index) => h('div', {
+          key: index,
+          style: { fontFamily: MONO, fontSize: 11.5, color: TOKENS.text },
+        }, `🔎 ${query}`)),
+        (item.results ?? []).length
+          ? h('details', null,
+            h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, `${t('event.results')} (${item.results.length})`),
+            ...(item.results ?? []).map((result, index) => h('div', {
+              key: index,
+              style: { marginTop: 4, fontSize: 11, color: TOKENS.sub, lineHeight: '16px' },
+            },
+              h('span', { style: { color: TOKENS.brand } }, result.domain || ''),
+              h('div', { style: { color: TOKENS.text } }, result.snippet || ''),
+            )),
+          )
+          : null,
+      )
+    }
+
+    function SystemRow({ item, t }) {
+      const label = item.text || item.kind
+      return h('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 10.5, color: TOKENS.sub, padding: '2px 4px',
+        },
+      },
+        h('span', { style: { opacity: 0.7 } }, '·'),
+        h('span', null, label),
+        h('span', { style: { flex: 1 } }),
+        item.at ? h('span', null, relTime(typeof item.at === 'number' ? item.at : Date.parse(item.at), t)) : null,
+      )
+    }
+
+    function EventRow({ item, t }) {
+      switch (item.kind) {
+        case 'message': return h(MessageRow, { item, t })
+        case 'command': return h(CommandRow, { item, t })
+        case 'tool':
+        case 'mcp': return h(ToolRow, { item, t })
+        case 'file': return h(FileRow, { item, t })
+        case 'search': return h(SearchRow, { item, t })
+        default: return h(SystemRow, { item, t })
+      }
     }
 
     function Composer({ agent, session, cwd, t }) {

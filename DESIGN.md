@@ -301,6 +301,30 @@ P1 其余限制：WorkBuddy 的 CLI 运行是**新起一次运行**，不会续�
 
 验证：沙箱渲染展开后 6 个工位、2 个 SVG（植物）、**12 个官方图标 `<img>`**（工位头像 + 铭牌小图标）；`/agent-console/asset` 返回 `image/png`，非法文件名被拒。
 
+### 9.2 会话详情结构化渲染（2026-11-06）
+
+现象：详情把事件流当纯文本贴出来——工具调用是一整段 `exec const r=await Promise.allSettled(...)`，消息里的 Markdown（标题、加粗、表格）原样显示。
+
+根因：采集器把每条 item 压成 `{role, kind, text}`，把命令、MCP 结果、diff 全拼进 text。
+
+改法：采集器按 item 原样输出结构化事件，前端按类型渲染：
+
+| kind | 字段 | 前端渲染 |
+|---|---|---|
+| `message` | role / text / phase | Markdown：标题、列表、引用、表格、代码块、行内 `code`/粗体/斜体/链接 |
+| `command` | command / output / status / exitCode / durationMs / cwd | 命令卡：命令码块 + 可折叠输出 + 退出码/耗时 |
+| `mcp` | server / tool / status / arguments / result | MCP 卡：`server.tool` + 参数、结果折叠 |
+| `tool` | tool / input | 工具卡：名称 + 输入（JS/参数）折叠 |
+| `file` | changes[{path, changeType, diff}] | 文件卡：路径 + 增/改/删徽标 + 着色 diff |
+| `search` | queries / results[{domain, snippet}] | 搜索卡：查询 + 结果片段 |
+| 其它 | text | 细行系统事件 |
+
+实现要点：`client.js` 内置一个轻量 Markdown 渲染器（无外部依赖，避免加载 Harness Client 包）；命令/输出/参数/结果用原生 `<details>` 折叠；diff 逐行着色。数据侧优先用 `thread_history` 投影（带 command/aggregatedOutput/mcp result/diff），rollout 兜底时 `custom_tool_call` 也按 `tool + input` 结构化输出。
+
+附带收益：优先走投影后，压缩 rollout 的 100 MB 流式解压只在"投影也没有"时才触发。
+
+验证：HTTP 实测某 Codex 会话 25 条事件（4 message + 21 command，含 exitCode/输出）；沙箱渲染 6 类事件卡全部通过（含 1 个表格、5 个代码块）。
+
 ## 十、自动发现更多 Agent（2026-11-06）
 
 原来只有四个写死的适配器（Codex / Grok / Marvis / WorkBuddy），换一台机器或装新应用就看不到。现在增加一层**发现器**：显式适配器负责"能读会写"的深度集成，发现器负责把机器上其它 AI Agent 应用先列出来，标成「已发现」，等有人补适配器。

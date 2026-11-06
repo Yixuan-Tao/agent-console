@@ -145,7 +145,7 @@ function runCollector(args) {
   })
 }
 
-/** One rollout line -> a panel event, mirroring the collector's rules. */
+/** One rollout line -> a panel event, mirroring the collector's structured shapes. */
 function extractCodexEvent(obj) {
   const kind = obj?.type
   const payload = obj?.payload ?? {}
@@ -159,15 +159,26 @@ function extractCodexEvent(obj) {
         .join('')
       if (!text.trim()) return null
       const role = payload.role || 'assistant'
-      return { role: role === 'developer' ? 'system' : role, kind: 'message', text: text.slice(0, 1500), at: stamp }
+      return {
+        role: role === 'developer' ? 'system' : role,
+        kind: 'message',
+        text: text.slice(0, 12000),
+        at: stamp,
+      }
     }
     if (ptype === 'function_call' || ptype === 'custom_tool_call') {
       const raw = payload.arguments || payload.input || ''
-      return { role: 'assistant', kind: 'tool', text: `${payload.name} ${String(raw).slice(0, 300)}`, at: stamp }
+      return {
+        role: 'assistant',
+        kind: 'tool',
+        tool: payload.name || 'tool',
+        input: (typeof raw === 'string' ? raw : JSON.stringify(raw)).slice(0, 8000),
+        at: stamp,
+      }
     }
     if (ptype === 'agent_message') {
       const text = payload.message || payload.text || ''
-      if (text) return { role: 'assistant', kind: 'message', text: String(text).slice(0, 1500), at: stamp }
+      if (text) return { role: 'assistant', kind: 'message', text: String(text).slice(0, 12000), at: stamp }
     }
     return null
   }
