@@ -1023,6 +1023,59 @@ def codex_catalog_meta(thread_id: str) -> tuple[str, str, str]:
         return "", "", "local"
 
 
+def codex_rollout_events(rollout: str, tail_limit: int = 400) -> list[dict]:
+    """Structured-lite events from a rollout JSONL tail.
+
+    Used when the projection is missing or lags behind the live rollout file.
+    Event times stay as ISO strings; the client normalizes them.
+    """
+    events: list[dict] = []
+    try:
+        for line in tail_lines(rollout)[-tail_limit:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            kind = obj.get("type")
+            payload = obj.get("payload") or {}
+            stamp = obj.get("timestamp")
+            if kind == "response_item":
+                ptype = payload.get("type")
+                if ptype == "message":
+                    parts = []
+                    for part in payload.get("content") or []:
+                        if isinstance(part, dict):
+                            text = part.get("text") or part.get("content") or ""
+                            if isinstance(text, str):
+                                parts.append(text)
+                    text = "".join(parts)
+                    role = payload.get("role") or "assistant"
+                    if text.strip():
+                        events.append(event("system" if role == "developer" else role,
+                                            "message", transcript_text(text, 12000), stamp))
+                elif ptype in ("function_call", "custom_tool_call"):
+                    raw = payload.get("arguments") or payload.get("input") or ""
+                    if not isinstance(raw, str):
+                        raw = json.dumps(raw, ensure_ascii=False)
+                    events.append({
+                        "role": "assistant", "kind": "tool",
+                        "tool": payload.get("name") or "tool",
+                        "input": transcript_text(raw, 8000), "at": stamp,
+                    })
+                elif ptype == "agent_message":
+                    text = payload.get("message") or payload.get("text") or ""
+                    if text:
+                        events.append(event("assistant", "message", transcript_text(text, 12000), stamp))
+            elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete", "turn_aborted"):
+                events.append(event("system", "event", payload.get("type"), stamp))
+    except Exception as exc:
+        ERRORS.append({"app": "codex", "message": f"rollout: {exc}"})
+    return events
+
+
 def detail_codex(session_id: str) -> dict:
     title, cwd, source = codex_catalog_meta(session_id)
     rollout = None
@@ -1061,8 +1114,25 @@ def detail_codex(session_id: str) -> dict:
     # which the panel renders as cards instead of raw text.
     structured = codex_item_events(session_id)
     if structured:
-        baseline["note"] = "来自 thread_history 投影（结构化条目）"
-        baseline["events"] = structured[-40:]
+        events = structured
+        note = "来自 thread_history 投影（结构化条目）"
+        # The projection can lag behind the live rollout (observed: 11 minutes and a
+        # stale inProgress turn). Append the newer rollout tail so an open detail
+        # view reflects what the app actually finished.
+        if rollout and os.path.exists(rollout) and not compressed:
+            try:
+                newest = max((iso_to_ms(item.get("at")) or 0) for item in events) if events else 0
+                fresh = codex_rollout_events(rollout)
+                fresh_newest = max((iso_to_ms(item.get("at")) or 0) for item in fresh) if fresh else 0
+                if fresh_newest - newest > 30_000:
+                    tail = [item for item in fresh if (iso_to_ms(item.get("at")) or 0) > newest]
+                    if tail:
+                        events = events + tail
+                        note += f" · 投影落后约 {round((fresh_newest - newest) / 1000)} 秒，尾部取自 rollout"
+            except Exception as exc:
+                ERRORS.append({"app": "codex", "message": f"merge rollout: {exc}"})
+        baseline["note"] = note
+        baseline["events"] = events[-40:]
         return baseline
 
     if compressed and rollout and os.path.exists(rollout):
@@ -1076,51 +1146,7 @@ def detail_codex(session_id: str) -> dict:
     events: list[dict] = []
     note = ""
     if rollout and os.path.exists(rollout):
-        try:
-            for line in tail_lines(rollout)[-400:]:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                kind = obj.get("type")
-                payload = obj.get("payload") or {}
-                stamp = obj.get("timestamp")
-                if kind == "response_item":
-                    ptype = payload.get("type")
-                    if ptype == "message":
-                        content = payload.get("content") or []
-                        parts = []
-                        for part in content:
-                            if not isinstance(part, dict):
-                                continue
-                            text = part.get("text") or part.get("content") or ""
-                            if isinstance(text, str):
-                                parts.append(text)
-                        text = "".join(parts)
-                        role = payload.get("role") or "assistant"
-                        if text.strip():
-                            events.append(event("system" if role == "developer" else role,
-                                                "message", text, stamp))
-                    elif ptype in ("function_call", "custom_tool_call"):
-                        raw = payload.get("arguments") or payload.get("input") or ""
-                        if not isinstance(raw, str):
-                            raw = json.dumps(raw, ensure_ascii=False)
-                        events.append({
-                            "role": "assistant", "kind": "tool",
-                            "tool": payload.get("name") or "tool",
-                            "input": transcript_text(raw, 8000), "at": stamp,
-                        })
-                    elif ptype == "agent_message":
-                        text = payload.get("message") or payload.get("text") or ""
-                        if text:
-                            events.append(event("assistant", "message", text, stamp))
-                elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete", "turn_aborted"):
-                    events.append(event("system", "event", payload.get("type"), stamp))
-        except Exception as exc:
-            ERRORS.append({"app": "codex", "message": f"rollout: {exc}"})
+        events = codex_rollout_events(rollout)
         if events:
             note = "来自 rollout 事件流（尾部 400 行）"
 

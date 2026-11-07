@@ -23,7 +23,8 @@ window.__ModuleLoader__.load({
     }
     const POLL_MS = 5000
     const JOB_POLL_MS = 1200
-    const BUILD = 'v0.5.0'
+    const DETAIL_POLL_MS = 4000
+    const BUILD = 'v0.6.0'
 
     const DICT = {
       zh: {
@@ -1399,15 +1400,31 @@ window.__ModuleLoader__.load({
           return undefined
         }
         let alive = true
-        setDetail({ loading: true, data: null, error: '' })
-        getJSON(`${ROUTES.session}?app=${encodeURIComponent(agent.app)}&id=${encodeURIComponent(session.id)}`)
-          .then((doc) => {
+        const url = `${ROUTES.session}?app=${encodeURIComponent(agent.app)}&id=${encodeURIComponent(session.id)}`
+        const load = async (quiet) => {
+          if (!quiet) setDetail({ loading: true, data: null, error: '' })
+          try {
+            const doc = await getJSON(url)
             if (alive) setDetail({ loading: false, data: doc, error: '' })
-          })
-          .catch((caught) => {
-            if (alive) setDetail({ loading: false, data: null, error: String(caught?.message ?? caught) })
-          })
-        return () => { alive = false }
+          } catch (caught) {
+            if (alive) {
+              setDetail((prev) => ({
+                loading: false,
+                data: quiet ? prev.data : null,
+                error: String(caught?.message ?? caught),
+              }))
+            }
+          }
+        }
+        load(false)
+        // Keep the open transcript live: the app may finish a turn after we fetched.
+        const timer = window.setInterval(() => {
+          if (!document.hidden) load(true)
+        }, DETAIL_POLL_MS)
+        return () => {
+          alive = false
+          window.clearInterval(timer)
+        }
       }, [agent.app, session?.id])
 
       const data = detail.data?.id === session?.id ? detail.data : null
