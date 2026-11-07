@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-agent-console",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Agent 控制台：在本机统一查看并驱动 Codex / Grok Bot / Marvis / WorkBuddy 的会话。",

@@ -23,11 +23,17 @@ window.__ModuleLoader__.load({
     }
     const POLL_MS = 5000
     const JOB_POLL_MS = 1200
-    const BUILD = 'v0.4.0'
+    const BUILD = 'v0.5.0'
 
     const DICT = {
       zh: {
         'panel.title': 'Agent 控制台',
+        'event.duration': '用时',
+        'event.activity': '执行过程',
+        'event.activityFailed': '执行过程有异常',
+        'project.all': '所有项目',
+        'project.none': '未归入项目',
+        'project.cloudInfo': '本机缓存了该云端项目的名称，尚无可读取的对话归属。',
         'panel.subtitle': '本机 AI Agent 的实时状态',
         'panel.refresh': '刷新',
         'panel.updated': '更新于',
@@ -102,7 +108,7 @@ window.__ModuleLoader__.load({
         'send.button': '发送',
         'send.append': '会追加到该会话的队列（codex queue），桌面端取走后继续执行。',
         'send.new-run': '会在该会话的工作目录新起一次 CLI 运行（不是续写图形界面里那段对话）。',
-        'send.ui': '该 Agent 没有官方命令行：会聚焦它的窗口，把文字粘贴进输入框并回车。请先在应用里打开目标会话、把光标停在输入框；窗口不在前台时可能发到别的会话。',
+        'send.ui': '该 Agent 没有官方命令行：发送前会核对「你选中的会话」是否就是「应用当前打开的会话」，不一致会直接拒绝，避免发到别的对话。发送时会聚焦窗口、粘贴并回车，请把光标停在输入框。',
         'send.disabled': '这个 Agent 在本版本只提供只读监控。',
         'send.confirm': '确认执行？这一步会真的把内容发出去。',
         'send.confirmYes': '确认发送',
@@ -112,11 +118,21 @@ window.__ModuleLoader__.load({
         'send.failed': '执行失败',
         'send.output': '输出',
         'send.again': '再发一条',
+        'send.target': '目标',
+        'send.intoThread': '追加到该会话的队列',
+        'send.intoCurrent': '发送到应用当前打开的会话',
+        'send.newConversation': '在该目录新起一个对话（不会写回所选会话）',
         'errors.title': '采集异常',
         'none': '—',
       },
       en: {
         'panel.title': 'Agent Console',
+        'event.duration': 'Duration',
+        'event.activity': 'Activity',
+        'event.activityFailed': 'Activity with errors',
+        'project.all': 'All projects',
+        'project.none': 'No project',
+        'project.cloudInfo': 'This cloud project name is cached locally. Conversation membership is unavailable.',
         'panel.subtitle': 'Live state of the local AI agents',
         'panel.refresh': 'Refresh',
         'panel.updated': 'Updated',
@@ -191,7 +207,7 @@ window.__ModuleLoader__.load({
         'send.button': 'Send',
         'send.append': 'Appends to this conversation’s queue (codex queue); the desktop picks it up.',
         'send.new-run': 'Starts a new CLI run in this conversation’s directory (it does not continue the GUI thread).',
-        'send.ui': 'No official CLI for this agent: the console focuses its window, pastes the text into the composer and presses Enter. Open the target conversation first and keep the caret in the composer; if another window is in front the text may land in the wrong conversation.',
+        'send.ui': 'No official CLI for this agent: before sending, the console checks that the conversation selected here is the one the app currently shows, and refuses on a mismatch. It then focuses the window, pastes and presses Enter — keep the caret in the composer.',
         'send.disabled': 'This agent is read-only in this version.',
         'send.confirm': 'Run it for real? This actually sends the text.',
         'send.confirmYes': 'Send now',
@@ -201,6 +217,10 @@ window.__ModuleLoader__.load({
         'send.failed': 'Failed',
         'send.output': 'Output',
         'send.again': 'Send another',
+        'send.target': 'Target',
+        'send.intoThread': 'Appends to this conversation’s queue',
+        'send.intoCurrent': 'Goes to the conversation the app currently shows',
+        'send.newConversation': 'Starts a new conversation in that directory (not this one)',
         'errors.title': 'Collector issues',
         'none': '—',
       },
@@ -664,52 +684,59 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------- detail
     // ---------------------------------------------------------------- event rendering
     const CODE_STYLE = {
-      margin: 0, padding: '8px 10px', borderRadius: 8,
+      margin: 0, padding: '12px 14px', borderRadius: 8,
       background: TOKENS.card, border: `1px solid ${TOKENS.border}`,
-      fontFamily: MONO, fontSize: 11.5, lineHeight: '17px',
-      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-      maxHeight: 280, overflow: 'auto', color: TOKENS.text,
+      fontFamily: MONO, fontSize: 12.5, lineHeight: '21px',
+      whiteSpace: 'pre', wordBreak: 'normal', tabSize: 2,
+      maxHeight: 360, overflow: 'auto', color: TOKENS.text,
     }
 
-    function renderInline(text, keyPrefix) {
+    function renderInline(text, keyPrefix = 'inline', depth = 0) {
       if (!text) return null
+      if (depth > 12) return String(text)
       const out = []
-      const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(_[^_\n]+_)|(!?\[[^\]\n]*\]\([^)\n]+\))|(\$[^$\n]+\$)/g
+      // Code and escaped punctuation take precedence over emphasis and links.
+      const re = /\\[\\`*{}\[\]()#+\-.!_|~>]|(`+)([^`]*(?:`(?!\1)[^`]*)*)\1|\*\*\*(?=\S)([\s\S]*?\S)\*\*\*|\*\*(?=\S)([\s\S]*?\S)\*\*(?!\*)|__(?=\S)([\s\S]*?\S)__(?!\w)|~~(?=\S)([\s\S]*?\S)~~|\*(?=\S)([^*\n]*?\S)\*|(?<!\w)_(?=\S)([^_\n]*?\S)_(?!\w)|!?\[[^\]\n]*\]\((?:<[^>\n]+>|[^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)|\$[^$\n]+\$/g
       let last = 0
       let match
-      let index = 0
       const codeStyle = {
-        fontFamily: MONO, fontSize: '0.94em', padding: '0 4px', borderRadius: 4,
-        background: TOKENS.card2, border: `1px solid ${TOKENS.border}`,
+        fontFamily: MONO, fontSize: '0.9em', padding: '2px 5px', borderRadius: 5,
+        background: TOKENS.card2, overflowWrap: 'anywhere',
       }
-      while ((match = re.exec(text)) !== null) {
+      while ((match = re.exec(String(text))) !== null) {
         if (match.index > last) out.push(text.slice(last, match.index))
         const token = match[0]
-        const key = `${keyPrefix}-${index++}`
-        if (token.startsWith('`')) {
-          out.push(h('code', { key, style: codeStyle }, token.slice(1, -1)))
+        const key = `${keyPrefix}-${match.index}`
+        const inner = (value) => renderInline(value, key, depth + 1)
+        if (token.startsWith('\\')) {
+          out.push(token.slice(1))
+        } else if (token.startsWith('`')) {
+          const marker = token.match(/^`+/)[0]
+          out.push(h('code', { key, style: codeStyle }, token.slice(marker.length, -marker.length)))
+        } else if (token.startsWith('***')) {
+          out.push(h('strong', { key }, h('em', null, inner(token.slice(3, -3)))))
         } else if (token.startsWith('**') || token.startsWith('__')) {
-          out.push(h('strong', { key }, token.slice(2, -2)))
+          out.push(h('strong', { key, style: { fontWeight: 600 } }, inner(token.slice(2, -2))))
         } else if (token.startsWith('~~')) {
-          out.push(h('del', { key, style: { opacity: 0.7 } }, token.slice(2, -2)))
+          out.push(h('del', { key }, inner(token.slice(2, -2))))
         } else if (token.startsWith('$')) {
-          out.push(h('code', { key, style: { ...codeStyle, color: TOKENS.warn } }, token.slice(1, -1)))
+          out.push(h('code', { key, style: codeStyle }, token.slice(1, -1)))
         } else if (token.startsWith('*') || token.startsWith('_')) {
-          out.push(h('em', { key }, token.slice(1, -1)))
+          out.push(h('em', { key }, inner(token.slice(1, -1))))
         } else {
-          const link = /^(!?)\[([^\]]*)\]\(([^)]+)\)$/.exec(token)
-          const href = (link[3] || '').replace(/^<|>$/g, '')
-          if (link[1]) {
-            out.push(h('a', {
-              key, href, target: '_blank', rel: 'noreferrer',
-              style: { color: TOKENS.brand, textDecoration: 'none' },
-            }, `🖼 ${link[2] || '图片'}`))
-          } else {
-            out.push(h('a', {
-              key, href, target: '_blank', rel: 'noreferrer',
-              style: { color: TOKENS.brand, textDecoration: 'none' },
-            }, link[2]))
-          }
+          const link = /^(!?)\[([^\]]*)\]\(([\s\S]*)\)$/.exec(token)
+          const destination = link[3].trim()
+          const angle = /^<([^>]+)>$/.exec(destination)
+          const href = angle ? angle[1] : destination.replace(/\s+["'][^"']*["']$/, '')
+          const label = link[1] ? `🖼 ${link[2] || '图片'}` : inner(link[2])
+          // Preserve local file links, but never emit executable/data URLs.
+          const safe = !/[\u0000-\u001f\u007f]/.test(href)
+            && (!/^[a-z][a-z\d+.-]*:/i.test(href)
+              || /^(https?:|mailto:|codex:\/\/|[a-z]:[\\/])/i.test(href))
+          out.push(safe
+            ? h('a', { key, href, target: '_blank', rel: 'noopener noreferrer',
+              style: { color: TOKENS.brand, textDecoration: 'underline', textUnderlineOffset: 3 } }, label)
+            : h('span', { key }, label))
         }
         last = match.index + token.length
       }
@@ -717,209 +744,213 @@ window.__ModuleLoader__.load({
       return out
     }
 
+    function tableCells(line) {
+      const cells = []
+      let cell = ''
+      let codeMarker = ''
+      const value = line.trim()
+      for (let index = 0; index < value.length; index += 1) {
+        const char = value[index]
+        if (char === '\\' && index + 1 < value.length) {
+          // Keep escapes for inline parsing. An escaped pipe belongs to its cell.
+          cell += char + value[++index]
+        } else if (char === '`') {
+          const marker = value.slice(index).match(/^`+/)[0]
+          if (!codeMarker) codeMarker = marker
+          else if (marker === codeMarker) codeMarker = ''
+          cell += marker
+          index += marker.length - 1
+        } else if (char === '|' && !codeMarker) {
+          cells.push(cell.trim())
+          cell = ''
+        } else {
+          cell += char
+        }
+      }
+      cells.push(cell.trim())
+      if (value.startsWith('|')) cells.shift()
+      if (value.endsWith('|') && cells[cells.length - 1] === '') cells.pop()
+      return cells
+    }
+
     function renderTable(rows, separator, keyPrefix) {
-      const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
-      const header = cells(rows[0])
-      const body = rows.slice(1).map(cells)
-      const aligns = cells(separator || '').map((cell) => {
-        const left = cell.startsWith(':')
-        const right = cell.endsWith(':')
-        return left && right ? 'center' : right ? 'right' : 'left'
-      })
-      const alignOf = (index) => aligns[index] || 'left'
-      const cellStyle = { padding: '4px 8px', borderBottom: `1px solid ${TOKENS.border}`, verticalAlign: 'top' }
-      return h('div', { key: keyPrefix, style: { overflowX: 'auto', margin: '4px 0' } },
-        h('table', { style: { borderCollapse: 'collapse', fontSize: 11.5, minWidth: '60%' } },
-          h('thead', null, h('tr', null, header.map((cell, index) => h('th', {
-            key: index,
-            style: {
-              ...cellStyle, textAlign: alignOf(index), color: TOKENS.sub,
-              fontWeight: 600, borderBottom: `1px solid ${TOKENS.border2}`,
-            },
+      const header = tableCells(rows[0])
+      const aligns = tableCells(separator).map((cell) =>
+        cell.endsWith(':') ? (cell.startsWith(':') ? 'center' : 'right') : 'left')
+      const cellStyle = {
+        padding: '10px 14px', borderBottom: `1px solid ${TOKENS.border}`,
+        verticalAlign: 'top', lineHeight: 1.65, overflowWrap: 'break-word',
+      }
+      return h('div', {
+        key: keyPrefix, role: 'region', 'aria-label': '表格', tabIndex: 0,
+        style: { overflowX: 'auto', maxWidth: '100%', margin: '16px 0',
+          border: `1px solid ${TOKENS.border}`, borderRadius: 10 },
+      }, h('table', { style: { borderCollapse: 'collapse', fontSize: '0.94em', width: '100%' } },
+        h('thead', { style: { background: TOKENS.card2 } }, h('tr', null,
+          header.map((cell, index) => h('th', {
+            key: index, scope: 'col',
+            style: { ...cellStyle, textAlign: aligns[index], fontWeight: 600, whiteSpace: 'nowrap' },
           }, renderInline(cell, `${keyPrefix}-h${index}`))))),
-          h('tbody', null, body.map((row, rowIndex) => h('tr', { key: rowIndex },
-            row.map((cell, cellIndex) => h('td', {
-              key: cellIndex, style: { ...cellStyle, textAlign: alignOf(cellIndex) },
-            }, renderInline(cell, `${keyPrefix}-${rowIndex}-${cellIndex}`)))))),
-        ),
-      )
+        h('tbody', null, rows.slice(1).map((line, rowIndex) => {
+          const row = tableCells(line)
+          return h('tr', { key: rowIndex }, header.map((_, cellIndex) => h('td', {
+            key: cellIndex,
+            style: { ...cellStyle, textAlign: aligns[cellIndex],
+              borderBottom: rowIndex === rows.length - 2 ? 'none' : cellStyle.borderBottom },
+          }, renderInline(row[cellIndex] || '', `${keyPrefix}-${rowIndex}-${cellIndex}`))))
+        })),
+      ))
     }
 
     function renderList(items, ordered, keyPrefix) {
-      const roots = []
-      let current = null
-      for (const item of items) {
-        if (!current || item.indent <= current.indent) {
-          current = { ...item, children: [] }
-          roots.push(current)
-        } else {
-          current.children.push(item)
-        }
-      }
-      const marker = (task) => (task === null
-        ? null
-        : h('span', { style: { marginRight: 5, color: task ? TOKENS.ok : TOKENS.sub } }, task ? '☑' : '☐'))
       return h(ordered ? 'ol' : 'ul', {
-        key: keyPrefix,
-        style: { margin: '2px 0', paddingLeft: ordered ? 20 : 18 },
+        key: keyPrefix, start: ordered ? items[0].number : undefined,
+        style: { margin: '10px 0', paddingLeft: 26, lineHeight: 1.8 },
+      }, items.map((item, index) => h('li', {
+        key: index, style: { paddingLeft: 3, margin: '5px 0', listStyleType: item.task === null ? undefined : 'none' },
       },
-        roots.map((item, index) => h('li', { key: index, style: { marginBottom: 2 } },
-          marker(item.task),
-          renderInline(item.text, `${keyPrefix}-${index}`),
-          item.children.length
-            ? h('ul', { style: { margin: '2px 0', paddingLeft: 16 } },
-              item.children.map((child, childIndex) => h('li', { key: childIndex },
-                marker(child.task),
-                renderInline(child.text, `${keyPrefix}-${index}-${childIndex}`))))
-            : null,
-        )))
+        item.task === null ? null : h('span', {
+          role: 'checkbox', 'aria-checked': item.task, 'aria-label': item.task ? '已完成' : '未完成',
+          style: { display: 'inline-block', marginLeft: -23, marginRight: 7, color: item.task ? TOKENS.ok : TOKENS.sub },
+        }, item.task ? '☑' : '☐'),
+        renderInline(item.text, `${keyPrefix}-${index}`),
+        item.continuation.length ? renderMarkdown(item.continuation.join('\n')) : null,
+      )))
     }
 
-    /** Minimal markdown renderer: headings, lists, quotes, tables, fences, inline marks. */
+    /** Render text as React elements. Raw HTML stays text, including in code blocks. */
     function renderMarkdown(text) {
-      if (!text) return null
-      const lines = String(text).replace(/\r\n/g, '\n').split('\n')
+      if (!text) return []
+      const lines = String(text).replace(/\r\n?/g, '\n').split('\n')
       const blocks = []
       let i = 0
       let key = 0
-      const push = (node) => blocks.push(node)
+      const listPattern = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/
+      const fencePattern = /^ {0,3}(`{3,}|~{3,})([^\s]*)\s*$/
+      const headingPattern = /^ {0,3}(#{1,6})\s+(.*)$/
+      const rulePattern = /^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/
+      const isTable = (index) => {
+        if (index + 1 >= lines.length || !lines[index].includes('|')) return false
+        const columns = tableCells(lines[index + 1])
+        return columns.length === tableCells(lines[index]).length
+          && columns.length > 0 && columns.every((cell) => /^:?-{3,}:?$/.test(cell))
+      }
+      const startsBlock = (index) => fencePattern.test(lines[index]) || headingPattern.test(lines[index])
+        || listPattern.test(lines[index]) || /^\s*>/.test(lines[index]) || rulePattern.test(lines[index])
+        || /^\s*\$\$/.test(lines[index]) || isTable(index)
       while (i < lines.length) {
         const line = lines[i]
         if (!line.trim()) { i += 1; continue }
+        const fence = fencePattern.exec(line)
+        if (fence) {
+          const language = fence[2].toLowerCase()
+          const closing = new RegExp(`^ {0,3}${fence[1][0]}{${fence[1].length},}\\s*$`)
+          const buffer = []
+          i += 1
+          while (i < lines.length && !closing.test(lines[i])) buffer.push(lines[i++])
+          if (i < lines.length) i += 1
+          blocks.push(h('div', { key: `b${key++}`, style: {
+            margin: '16px 0', borderRadius: 10, overflow: 'hidden', border: `1px solid ${TOKENS.border}`,
+          } },
+            h('div', { style: { padding: '7px 14px', background: TOKENS.card2,
+              color: TOKENS.sub, fontSize: 12, fontFamily: MONO } }, language || 'text'),
+            h('pre', { style: { ...CODE_STYLE, border: 'none', borderRadius: 0,
+              padding: '14px 16px', fontSize: 13, lineHeight: 1.7, maxHeight: 'none',
+              whiteSpace: 'pre', overflowX: 'auto', wordBreak: 'normal' } }, h('code', null, buffer.join('\n')))))
+          continue
+        }
         if (/^\s*\$\$/.test(line)) {
           const buffer = []
           const rest = line.replace(/^\s*\$\$/, '')
-          if (rest.trim().endsWith('$$')) {
-            buffer.push(rest.trim().replace(/\$\$$/, ''))
-            i += 1
-          } else {
-            if (rest.trim()) buffer.push(rest.trim())
-            i += 1
-            while (i < lines.length && !/^\s*\$\$/.test(lines[i])) { buffer.push(lines[i]); i += 1 }
-            i += 1
+          i += 1
+          if (rest.trim().endsWith('$$')) buffer.push(rest.trim().slice(0, -2))
+          else {
+            if (rest.trim()) buffer.push(rest)
+            while (i < lines.length && !/^\s*\$\$/.test(lines[i])) buffer.push(lines[i++])
+            if (i < lines.length) i += 1
           }
-          push(h('pre', { key: `b${key++}`, style: CODE_STYLE }, h('code', null, buffer.join('\n'))))
+          blocks.push(h('pre', { key: `b${key++}`, style: { ...CODE_STYLE, margin: '16px 0', padding: 16 } },
+            h('code', null, buffer.join('\n'))))
           continue
         }
-        const fence = /^\s*```(\w*)\s*$/.exec(line)
-        if (fence) {
-          const lang = (fence[1] || '').toLowerCase()
-          i += 1
-          const buffer = []
-          while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buffer.push(lines[i]); i += 1 }
-          i += 1
-          const body = buffer.join('\n')
-          if (lang === 'mermaid') {
-            push(h('div', { key: `b${key++}`, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              h('div', { style: blockLabel }, 'mermaid 图（源码）'),
-              h('pre', { style: CODE_STYLE }, h('code', null, body))))
-          } else if (lang) {
-            push(h('div', { key: `b${key++}`, style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              h('div', { style: blockLabel }, lang),
-              h('pre', { style: CODE_STYLE }, h('code', null, body))))
-          } else {
-            push(h('pre', { key: `b${key++}`, style: CODE_STYLE }, h('code', null, body)))
-          }
-          continue
-        }
-        const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+        const heading = headingPattern.exec(line)
         if (heading) {
           const level = heading[1].length
-          const size = level <= 1 ? 15 : level === 2 ? 14 : level === 3 ? 13 : 12.5
-          push(h('div', {
-            key: `b${key++}`,
-            style: { fontSize: size, fontWeight: 700, marginTop: 6, lineHeight: '20px' },
-          }, renderInline(heading[2], `h${key}`)))
+          blocks.push(h(`h${level}`, { key: `b${key++}`, style: {
+            fontSize: [24, 21, 18, 16, 15, 15][level - 1], fontWeight: 600,
+            margin: `${blocks.length ? 24 : 0}px 0 12px`, lineHeight: 1.45,
+          } }, renderInline(heading[2].replace(/\s+#+\s*$/, ''), `h${key}`)))
           i += 1
           continue
         }
-        if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
-          const rows = []
+        if (isTable(i)) {
+          const rows = [line]
           const separator = lines[i + 1]
-          while (i < lines.length && /^\s*\|/.test(lines[i])) {
-            if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i])) rows.push(lines[i])
-            i += 1
-          }
-          if (rows.length) push(renderTable(rows, separator, `t${key++}`))
+          i += 2
+          while (i < lines.length && lines[i].trim() && lines[i].includes('|') && !startsBlock(i)) rows.push(lines[i++])
+          blocks.push(renderTable(rows, separator, `t${key++}`))
           continue
         }
-        if (/^\s*([-*_])\s*\1\s*\1?\s*$/.test(line)) {
-          push(h('hr', {
-            key: `b${key++}`,
-            style: { border: 'none', borderTop: `1px solid ${TOKENS.border}`, margin: '8px 0' },
-          }))
+        if (rulePattern.test(line)) {
+          blocks.push(h('hr', { key: `b${key++}`, style: {
+            border: 'none', borderTop: `1px solid ${TOKENS.border}`, margin: '20px 0',
+          } }))
           i += 1
           continue
         }
         if (/^\s*>/.test(line)) {
           const quoted = []
-          while (i < lines.length && /^\s*>/.test(lines[i])) {
-            quoted.push(lines[i].replace(/^\s*>\s?/, ''))
-            i += 1
-          }
-          push(h('blockquote', {
-            key: `b${key++}`,
-            style: {
-              margin: '4px 0', padding: '2px 0 2px 10px',
-              borderLeft: `2px solid ${TOKENS.border2}`, color: TOKENS.sub,
-            },
-          }, renderMarkdown(quoted.join('\n'))))
+          while (i < lines.length && /^\s*>/.test(lines[i])) quoted.push(lines[i++].replace(/^\s*>\s?/, ''))
+          blocks.push(h('blockquote', { key: `b${key++}`, style: {
+            margin: '16px 0', padding: '1px 0 1px 16px', borderLeft: `3px solid ${TOKENS.border}`, color: TOKENS.sub,
+          } }, renderMarkdown(quoted.join('\n'))))
           continue
         }
-        if (/^\s*[-*+]\s+/.test(line)) {
+        const firstItem = listPattern.exec(line)
+        if (firstItem) {
+          const indent = firstItem[1].length
+          const ordered = /^\d/.test(firstItem[2])
           const items = []
-          while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-            const raw = lines[i]
-            const indent = raw.match(/^\s*/)[0].length
-            let body = raw.replace(/^\s*[-*+]\s+/, '')
-            let task = null
-            const checkbox = /^\[([ xX])\]\s*(.*)$/.exec(body)
-            if (checkbox) {
-              task = checkbox[1].toLowerCase() === 'x'
-              body = checkbox[2]
+          while (i < lines.length) {
+            const match = listPattern.exec(lines[i])
+            if (!match || match[1].length !== indent || /^\d/.test(match[2]) !== ordered) break
+            const contentIndent = lines[i].length - match[3].length
+            const checkbox = /^\[([ xX])\]\s*(.*)$/.exec(match[3])
+            const item = { text: checkbox ? checkbox[2] : match[3],
+              task: checkbox ? checkbox[1].toLowerCase() === 'x' : null,
+              number: ordered ? parseInt(match[2], 10) : undefined, continuation: [] }
+            i += 1
+            while (i < lines.length) {
+              if (!lines[i].trim()) {
+                const next = lines[i + 1] || ''
+                if (!next.trim() || next.match(/^\s*/)[0].length <= indent) break
+                item.continuation.push('')
+                i += 1
+              } else if (lines[i].match(/^\s*/)[0].length > indent) {
+                const amount = Math.min(contentIndent, lines[i].match(/^\s*/)[0].length)
+                item.continuation.push(lines[i++].slice(amount))
+              } else break
             }
-            items.push({ indent, text: body, task })
-            i += 1
+            items.push(item)
+            if (!lines[i]?.trim() && listPattern.test(lines[i + 1] || '')) i += 1
           }
-          push(renderList(items, false, `l${key++}`))
+          blocks.push(renderList(items, ordered, `l${key++}`))
           continue
         }
-        if (/^\s*\d+[.)]\s+/.test(line)) {
-          const items = []
-          while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
-            const raw = lines[i]
-            items.push({
-              indent: raw.match(/^\s*/)[0].length,
-              text: raw.replace(/^\s*\d+[.)]\s+/, ''),
-              task: null,
-            })
-            i += 1
-          }
-          push(renderList(items, true, `o${key++}`))
-          continue
-        }
-        const paragraph = []
-        while (
-          i < lines.length && lines[i].trim()
-          && !/^\s*```/.test(lines[i]) && !/^(#{1,6})\s/.test(lines[i])
-          && !/^\s*[-*+]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i])
-          && !/^\s*>/.test(lines[i]) && !/^\s*\|/.test(lines[i])
-        ) {
-          paragraph.push(lines[i])
-          i += 1
-        }
-        push(h('div', {
-          key: `b${key++}`,
-          style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: '2px 0' },
-        }, renderInline(paragraph.join('\n'), `p${key}`)))
+        // Always consume the first line, even an incomplete table or unknown syntax.
+        const paragraph = [lines[i++]]
+        while (i < lines.length && lines[i].trim() && !startsBlock(i)) paragraph.push(lines[i++])
+        blocks.push(h('p', { key: `b${key++}`, style: {
+          whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: '0 0 14px', lineHeight: 1.8,
+        } }, renderInline(paragraph.join('\n'), `p${key}`)))
       }
       return blocks
     }
 
     const rowShell = {
-      display: 'flex', flexDirection: 'column', gap: 6,
-      padding: '8px 10px', borderRadius: 8,
-      background: TOKENS.card2, border: `1px solid ${TOKENS.border}`,
+      display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0,
+      padding: '12px 14px', borderRadius: 10,
+      background: TOKENS.card, border: `1px solid ${TOKENS.border}`,
     }
     const rowHeader = {
       display: 'flex', alignItems: 'center', gap: 6,
@@ -929,38 +960,42 @@ window.__ModuleLoader__.load({
 
     function MessageRow({ item, t }) {
       const role = item.role || 'assistant'
-      const color = role === 'user' ? TOKENS.brand : TOKENS.text
+      const isUser = role === 'user'
       const label = t(`role.${role}`) !== `role.${role}` ? t(`role.${role}`) : role
-      return h('div', {
-        style: { ...rowShell, borderLeft: `2px solid ${color}` },
+      return h('article', {
+        'aria-label': label,
+        style: {
+          minWidth: 0, margin: isUser ? '8px 0 20px auto' : '4px 0 24px',
+          width: isUser ? 'fit-content' : 'auto', maxWidth: isUser ? '88%' : '100%', boxSizing: 'border-box',
+          padding: isUser ? '14px 18px' : '0 2px',
+          borderRadius: 18, background: isUser ? TOKENS.card2 : 'transparent',
+        },
       },
-        h('div', { style: rowHeader },
-          h('span', { style: { fontWeight: 600, color } }, label),
-          item.phase ? h('span', null, `· ${item.phase}`) : null,
-          item.turnMs ? pill(`用时 ${Math.round(item.turnMs / 1000)} 秒`, TOKENS.sub) : null,
+        h('div', { style: { ...rowHeader, marginBottom: 8 } },
+          h('span', { style: { fontWeight: 600, color: TOKENS.sub } }, label),
+          item.turnMs ? h('span', null, `· ${t('event.duration')} ${Math.round(item.turnMs / 1000)} s`) : null,
           h('span', { style: { flex: 1 } }),
           item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
-        h('div', { style: { fontSize: 12, lineHeight: '19px', color: TOKENS.text } }, renderMarkdown(item.text)),
+        h('div', { style: { fontSize: 14, lineHeight: 1.8, color: TOKENS.text, overflowWrap: 'anywhere' } }, renderMarkdown(item.text)),
       )
     }
 
     function CommandRow({ item, t }) {
       const failed = item.exitCode != null && item.exitCode !== 0
       const statusText = item.exitCode != null ? `exit ${item.exitCode}` : (item.status || '')
-      return h('div', { style: rowShell },
-        h('div', { style: rowHeader },
+      return h('details', { style: { ...rowShell, display: 'block' }, open: failed },
+        h('summary', { style: { ...rowHeader, display: 'list-item', cursor: 'pointer', lineHeight: '22px' } },
           h('span', { style: { fontWeight: 600, color: failed ? TOKENS.err : TOKENS.text } }, t('event.command')),
+          h('span', { style: { fontFamily: MONO, margin: '0 10px', color: TOKENS.sub, overflowWrap: 'anywhere' } }, (item.command || '').split('\n')[0].slice(0, 90)),
           statusText ? pill(statusText, failed ? TOKENS.err : TOKENS.ok) : null,
           item.durationMs ? h('span', null, `${item.durationMs} ms`) : null,
-          item.cwd ? h('span', { style: { fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 } }, item.cwd) : null,
-          h('span', { style: { flex: 1 } }),
-          item.at ? h('span', null, relTime(toMs(item.at), t)) : null,
         ),
-        h('div', null, h('div', { style: blockLabel }, t('event.cmd')), h('pre', { style: CODE_STYLE }, h('code', null, item.command || ''))),
-        h('details', null,
-          h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, t('event.output')),
-          h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, (item.output || '').trim() || t('event.noOutput'))),
+        item.cwd ? h('div', { style: { ...blockLabel, marginTop: 10, overflowWrap: 'anywhere' } }, item.cwd) : null,
+        h('div', { style: { marginTop: 10 } }, h('div', { style: blockLabel }, t('event.cmd')), h('pre', { style: CODE_STYLE }, h('code', null, item.command || ''))),
+        h('div', { style: { marginTop: 10 } },
+          h('div', { style: blockLabel }, t('event.output')),
+          h('pre', { style: CODE_STYLE }, h('code', null, item.output || t('event.noOutput'))),
         ),
       )
     }
@@ -972,8 +1007,8 @@ window.__ModuleLoader__.load({
         ? JSON.stringify(item.arguments ?? {}, null, 2)
         : (item.input || item.output || '')
       const result = isMcp ? (item.result || '') : (item.output || '')
-      return h('div', { style: rowShell },
-        h('div', { style: rowHeader },
+      return h('details', { style: { ...rowShell, display: 'block' }, open: !!item.error },
+        h('summary', { style: { ...rowHeader, display: 'list-item', cursor: 'pointer', lineHeight: '22px' } },
           pill(isMcp ? 'MCP' : t('event.tool'), isMcp ? TOKENS.brand : TOKENS.sub),
           h('span', { style: { fontFamily: MONO, color: TOKENS.text, fontSize: 11.5 } }, title),
           item.status ? pill(item.status, item.status === 'completed' || item.status === 'failed' ? (item.status === 'failed' ? TOKENS.err : TOKENS.ok) : TOKENS.sub) : null,
@@ -984,13 +1019,13 @@ window.__ModuleLoader__.load({
         payload
           ? h('details', null,
             h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, isMcp ? t('event.args') : t('event.input')),
-            h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, payload.slice(0, 4000))),
+            h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, payload)),
           )
           : null,
         result
           ? h('details', null,
             h('summary', { style: { cursor: 'pointer', fontSize: 10.5, color: TOKENS.sub } }, t('event.result')),
-            h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, result.slice(0, 4000))),
+            h('pre', { style: { ...CODE_STYLE, marginTop: 4 } }, h('code', null, result)),
           )
           : null,
         item.error ? h('div', { style: { fontSize: 11, color: TOKENS.err } }, item.error) : null,
@@ -1106,6 +1141,36 @@ window.__ModuleLoader__.load({
         case 'search': return h(SearchRow, { item, t })
         default: return h(SystemRow, { item, t })
       }
+    }
+
+    function Conversation({ events, t }) {
+      const sections = []
+      let activity = []
+      const flushActivity = () => {
+        if (!activity.length) return
+        const items = activity
+        activity = []
+        const failed = items.some((item) => item.error || item.status === 'failed' || (item.exitCode != null && item.exitCode !== 0))
+        sections.push(h('details', {
+          key: `activity-${sections.length}`, open: failed,
+          style: { margin: '0 0 22px', minWidth: 0 },
+        },
+          h('summary', { style: { cursor: 'pointer', color: failed ? TOKENS.err : TOKENS.sub, fontSize: 12, padding: '8px 0' } },
+            `${t(failed ? 'event.activityFailed' : 'event.activity')} · ${items.length}`),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, borderLeft: `1px solid ${TOKENS.border}`, padding: '8px 0 0 14px' } },
+            items.map((item, index) => h(EventRow, { key: index, item, t }))),
+        ))
+      }
+      for (const item of events) {
+        if (item.kind !== 'message' || item.phase === 'commentary') {
+          activity.push(item)
+          continue
+        }
+        flushActivity()
+        sections.push(h(EventRow, { key: `message-${sections.length}`, item, t }))
+      }
+      flushActivity()
+      return h('div', { style: { maxWidth: 860, width: '100%', margin: '0 auto', minWidth: 0 } }, sections)
     }
 
     function Composer({ agent, session, cwd, t }) {
@@ -1229,6 +1294,12 @@ window.__ModuleLoader__.load({
             },
           },
             h('div', { style: { fontSize: 12, color: TOKENS.warn, fontWeight: 600 } }, t('send.confirm')),
+            h('div', { style: { fontSize: 11, color: TOKENS.text } },
+              `${t('send.target')}：${session.title} · ${
+                preview.target?.mode === 'current' ? t('send.intoCurrent')
+                  : preview.target?.mode === 'new-run' ? t('send.newConversation')
+                    : t('send.intoThread')
+              }`),
             h('div', { style: { fontFamily: MONO, fontSize: 11, color: TOKENS.sub, wordBreak: 'break-all' } },
               preview.command),
             h('div', { style: { display: 'flex', gap: 8 } },
@@ -1309,8 +1380,18 @@ window.__ModuleLoader__.load({
     }
 
     function Workspace({ agent, view, onBack, onPickSession, t }) {
-      const session = (agent.sessions ?? []).find((item) => item.id === view.session) ?? null
       const [detail, setDetail] = useState({ loading: false, data: null, error: '' })
+      const [projectId, setProjectId] = useState('')
+      const projects = agent.projects ?? []
+      const project = projects.find((item) => item.id === projectId)
+      const allSessions = agent.sessions ?? []
+      const sessionsFor = (id) => {
+        if (!id) return allSessions
+        if (id === '__none') return allSessions.filter((item) => !item.projectId && item.source !== 'chatgpt')
+        return projects.find((item) => item.id === id)?.sessions ?? []
+      }
+      const sessions = sessionsFor(projectId)
+      const session = sessions.find((item) => item.id === view.session) ?? sessions[0] ?? null
 
       useEffect(() => {
         if (!session) {
@@ -1329,7 +1410,7 @@ window.__ModuleLoader__.load({
         return () => { alive = false }
       }, [agent.app, session?.id])
 
-      const data = detail.data
+      const data = detail.data?.id === session?.id ? detail.data : null
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 } },
         h('div', {
@@ -1346,19 +1427,45 @@ window.__ModuleLoader__.load({
             ? pill(t('badge.discovered'))
             : agent.canSendPrompt ? pill(t('badge.canSend'), TOKENS.brand) : pill(t('badge.readonly')),
           h('span', { style: { flex: 1 } }),
-          h('span', { style: { fontSize: 11, color: TOKENS.sub } }, `${(agent.sessions ?? []).length} ${t('badge.sessions')}`),
+          h('span', { style: { fontSize: 11, color: TOKENS.sub } }, `${sessions.length} ${t('badge.sessions')}`),
         ),
+        h('style', null, `
+          .agent-console-workspace { grid-template-columns: minmax(210px, 270px) minmax(0, 1fr); }
+          @media (max-width: 900px) {
+            .agent-console-workspace { grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); }
+          }
+          @media (max-width: 640px) {
+            .agent-console-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+            .agent-console-sessions { max-height: 140px; }
+          }
+        `),
         h('div', {
+          className: 'agent-console-workspace',
           style: {
             flex: 1, minHeight: 0, display: 'grid', gap: 12,
-            gridTemplateColumns: 'minmax(240px, 330px) minmax(0, 1fr)',
-            padding: '0 24px 20px',
+            padding: '0 20px 16px',
           },
         },
-          h('div', { style: { ...scrollBox, padding: 6 } },
-            (agent.sessions ?? []).length
-              ? (agent.sessions ?? []).map((item) => {
-                const active = item.id === view.session
+          h('div', { className: 'agent-console-sessions', style: { ...scrollBox, padding: 6 } },
+            projects.length ? h('div', { style: { padding: '6px 4px 12px' } },
+              h('select', {
+                'aria-label': t('project.all'), value: projectId,
+                onChange: (event) => {
+                  const next = event.target.value
+                  setProjectId(next)
+                  onPickSession(sessionsFor(next)[0]?.id ?? null)
+                },
+                style: { width: '100%', padding: '8px', borderRadius: 8, color: TOKENS.text, background: TOKENS.card, border: `1px solid ${TOKENS.border}`, font: 'inherit', fontSize: 12 },
+              },
+                h('option', { value: '' }, t('project.all')),
+                h('option', { value: '__none' }, t('project.none')),
+                projects.map((item) => h('option', { key: item.id, value: item.id }, `${item.name}${item.source === 'chatgpt' ? ` · ${t('badge.cloud')}` : ''}`)),
+              ),
+              project && !project.membershipAvailable ? h('div', { style: { fontSize: 12, color: TOKENS.sub, marginTop: 8, lineHeight: 1.6 } }, t('project.cloudInfo')) : null,
+            ) : null,
+            sessions.length
+              ? sessions.map((item) => {
+                const active = item.id === session?.id
                 const badge = sessionState(item, t)
                 return h('button', {
                   key: item.id,
@@ -1391,6 +1498,7 @@ window.__ModuleLoader__.load({
                       item.step || item.cwd || ''),
                     h('span', { style: { whiteSpace: 'nowrap' } }, relTime(item.lastActivityAt, t)),
                   ),
+                  item.projectName ? h('div', { style: { fontSize: 10.5, color: TOKENS.sub } }, item.projectName) : null,
                 )
               })
               : h('div', { style: { padding: 16, fontSize: 12, color: TOKENS.sub } }, t('workspace.empty')),
@@ -1410,7 +1518,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
                   h('div', { style: { fontSize: 14, fontWeight: 600, wordBreak: 'break-word' } }, session.title),
                   h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: TOKENS.sub } },
-                    h('span', { style: { fontFamily: MONO } }, `${t('detail.sessionId')}: ${session.id.slice(0, 18)}…`),
+                    session.projectName ? pill(session.projectName) : null,
                     session.cwd ? h('span', { style: { fontFamily: MONO, wordBreak: 'break-all' } }, session.cwd) : null,
                     h('span', null, `${t('detail.lastActivity')}: ${relTime(session.lastActivityAt, t)}`),
                   ),
@@ -1418,7 +1526,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { fontSize: 11, color: TOKENS.sub } },
                   data?.note || (detail.loading ? t('detail.loading') : ''),
                 ),
-                h('div', { style: { ...scrollBox, flex: 1, padding: 8, display: 'flex', flexDirection: 'column', gap: 8 } },
+                h('div', { style: { ...scrollBox, flex: 1, padding: '20px 24px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 } },
                   detail.error
                     ? h('div', { style: { fontSize: 12, color: TOKENS.err } }, detail.error)
                     : null,
@@ -1428,7 +1536,7 @@ window.__ModuleLoader__.load({
                   data && (data.events ?? []).length === 0 && !detail.loading
                     ? h('div', { style: { padding: 12, fontSize: 12, color: TOKENS.sub } }, t('detail.noEvents'))
                     : null,
-                  (data?.events ?? []).map((item, index) => h(EventRow, { key: index, item, t })),
+                  h(Conversation, { key: session.id, events: data?.events ?? [], t }),
                 ),
                 h(Composer, {
                   agent, session,

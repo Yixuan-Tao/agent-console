@@ -197,6 +197,8 @@ function codexEventsFromZst(filePath, options = {}) {
   return new Promise((resolve, reject) => {
     const input = createReadStream(filePath)
     const stream = input.pipe(zlib.createZstdDecompress())
+    // Decode across chunk boundaries so non-ASCII messages remain intact.
+    stream.setEncoding('utf8')
     let tail = ''
     let settled = false
     const timer = setTimeout(() => {
@@ -209,16 +211,18 @@ function codexEventsFromZst(filePath, options = {}) {
     timer.unref?.()
 
     stream.on('data', (chunk) => {
-      tail += chunk.toString('utf8')
+      tail += chunk
       if (tail.length > tailBytes) {
-        const cut = tail.lastIndexOf('\n')
-        tail = cut > 0 ? tail.slice(cut + 1) : tail.slice(-tailBytes)
+        const cut = tail.indexOf('\n', tail.length - tailBytes)
+        tail = cut >= 0 ? tail.slice(cut + 1) : tail.slice(-tailBytes)
       }
     })
+    input.on('error', (error) => stream.destroy(error))
     stream.on('error', (error) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      input.destroy()
       reject(error)
     })
     stream.on('end', () => {
@@ -329,6 +333,15 @@ function probeUiWindow(app) {
   })
 }
 
+async function currentSessionFor(app) {
+  if (!UI_APP_LABEL[app]) return null
+  try {
+    return await runCollector(['--current', app])
+  } catch {
+    return null
+  }
+}
+
 async function runSend(body) {
   const app = String(body?.app ?? '')
   const sessionId = String(body?.sessionId ?? '')
@@ -349,6 +362,19 @@ async function runSend(body) {
   let previewTarget = null
 
   if (UI_APP_LABEL[app]) {
+    // These apps expose no API for "send to conversation X": the keystrokes land
+    // in whatever conversation is open. Refuse unless the app is already on it.
+    const current = await currentSessionFor(app)
+    if (current && current.currentSessionId && sessionId && current.currentSessionId !== sessionId) {
+      const approx = current.approx
+        ? '（依据最近活跃会话判断，面板无法直接读取应用当前打开的会话）'
+        : ''
+      return {
+        ok: false,
+        error: `${UI_APP_LABEL[app]} 当前打开的会话不是你所选的这个${approx}。请先在应用里切换到目标会话再发送，或直接在应用内发送。`,
+        current: { sessionId: current.currentSessionId, approx: !!current.approx },
+      }
+    }
     const probe = await probeUiWindow(app)
     if (!probe.ok) {
       return {
@@ -363,17 +389,24 @@ async function runSend(body) {
     ]
     semantics = 'ui-automation'
     workdir = HERE
-    previewTarget = { pid: probe.pid, title: probe.title || UI_APP_LABEL[app] }
+    previewTarget = {
+      mode: 'current',
+      pid: probe.pid,
+      title: probe.title || UI_APP_LABEL[app],
+      sessionId: current?.currentSessionId || '',
+    }
   } else if (app === 'codex') {
     if (!sessionId) return { ok: false, error: 'codex needs a thread id' }
     command = firstExisting(codexCandidates(), 'codex')
     args = ['queue', '--thread', sessionId, '--message', text]
     semantics = 'append'
+    previewTarget = { mode: 'thread', threadId: sessionId }
   } else {
     command = firstExisting(nodeCandidates(), 'node')
     args = [CODEBUDDY_LAUNCHER, '-p', text, '--output-format', 'json']
     semantics = 'new-run'
     env.CODEBUDDY_SKIP_GIT_BASH_CHECK = '1'
+    previewTarget = { mode: 'new-run', cwd: workdir }
   }
 
   if (!body.confirm) {

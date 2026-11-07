@@ -82,6 +82,12 @@ def clip(text, limit: int = 160) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def transcript_text(text, limit: int = 12000) -> str:
+    """Bound transcript fields while preserving Markdown, indentation and lines."""
+    text = "" if text is None else str(text)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def strip_extended_path(path: str | None) -> str:
     if not path:
         return ""
@@ -214,6 +220,49 @@ def codex_dir() -> str:
     return os.path.join(HOME, ".codex")
 
 
+def codex_project_metadata() -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    """Read only project names and explicit memberships from the desktop cache."""
+    path = os.path.join(codex_dir(), ".codex-global-state.json")
+    if not os.path.isfile(path):
+        return [], {}, {}
+    try:
+        state = read_json(path)
+        if not isinstance(state, dict):
+            return [], {}, {}
+        projects = []
+        local = state.get("local-projects") or {}
+        if isinstance(local, dict):
+            for pid, value in local.items():
+                if isinstance(value, dict) and value.get("name"):
+                    projects.append({"id": str(pid), "name": clip(value["name"], 120),
+                                     "source": "local", "membershipAvailable": True})
+
+        atoms = state.get("electron-persisted-atom-state") or {}
+        cloud_cache = atoms.get("chatgpt-sidebar-state-v2") if isinstance(atoms, dict) else None
+        # A cache with multiple account entries cannot establish the active account.
+        if isinstance(cloud_cache, dict) and len(cloud_cache) == 1:
+            sidebar = next(iter(cloud_cache.values()))
+            if isinstance(sidebar, dict):
+                for value in sidebar.get("projects") or []:
+                    if isinstance(value, dict) and value.get("id") and value.get("name"):
+                        projects.append({"id": str(value["id"]), "name": clip(value["name"], 120),
+                                         "source": "chatgpt", "membershipAvailable": False})
+
+        project_ids = {p["id"] for p in projects}
+        assignments = {}
+        projectless = set(state.get("projectless-thread-ids") or [])
+        for sid, value in (state.get("thread-project-assignments") or {}).items():
+            if isinstance(value, dict) and value.get("projectId") in project_ids and sid not in projectless:
+                assignments[str(sid)] = str(value["projectId"])
+        migration = state.get("app-server-project-id-by-legacy-project-id-by-host") or {}
+        mapping = migration.get("local:" + codex_dir(), {}) if isinstance(migration, dict) else {}
+        aliases = {str(new): str(old) for old, new in mapping.items() if old in project_ids}
+        return projects, assignments, aliases
+    except Exception as exc:
+        ERRORS.append({"app": "codex", "message": f"project metadata: {exc}"})
+        return [], {}, {}
+
+
 def codex_history_connection():
     """thread_history_1 is a WAL database without sidecars; immutable=1 is the
     only reliable read mode (the app's own doctor reports it as degraded)."""
@@ -228,16 +277,16 @@ def _mcp_result_text(result) -> str:
     if result is None:
         return ""
     if isinstance(result, str):
-        return clip(result, 4000)
+        return transcript_text(result, 4000)
     if isinstance(result, dict):
         parts = []
         for part in result.get("content") or []:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
                 parts.append(part["text"])
         if parts:
-            return clip("\n".join(parts), 4000)
-        return clip(json.dumps(result, ensure_ascii=False), 4000)
-    return clip(str(result), 4000)
+            return transcript_text("\n".join(parts), 4000)
+        return transcript_text(json.dumps(result, ensure_ascii=False, indent=2), 4000)
+    return transcript_text(str(result), 4000)
 
 
 def _event_at(ms):
@@ -291,12 +340,12 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
             ]
             text = "\n".join(parts)
             if text.strip():
-                found = {"role": "user", "kind": "message", "text": clip(text, 8000), "at": at}
+                found = {"role": "user", "kind": "message", "text": transcript_text(text, 8000), "at": at}
         elif kind == "agentMessage":
             text = payload.get("text") or ""
             if text.strip():
                 found = {
-                    "role": "assistant", "kind": "message", "text": clip(text, 12000),
+                    "role": "assistant", "kind": "message", "text": transcript_text(text, 12000),
                     "at": at, "phase": payload.get("phase") or "",
                 }
                 turn_id = str(row["turn_id"] or "")
@@ -307,8 +356,8 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
         elif kind == "commandExecution":
             found = {
                 "role": "assistant", "kind": "command",
-                "command": clip(payload.get("command") or "", 8000),
-                "output": clip(payload.get("aggregatedOutput") or "", 8000),
+                "command": transcript_text(payload.get("command") or "", 8000),
+                "output": transcript_text(payload.get("aggregatedOutput") or "", 8000),
                 "status": payload.get("status") or "",
                 "exitCode": payload.get("exitCode"),
                 "durationMs": payload.get("durationMs"),
@@ -323,7 +372,7 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
                 "status": payload.get("status") or "",
                 "arguments": payload.get("arguments") or {},
                 "result": _mcp_result_text(payload.get("result")),
-                "error": clip(payload.get("error") or "", 1000),
+                "error": transcript_text(payload.get("error") or "", 1000),
                 "durationMs": payload.get("durationMs"),
                 "at": at,
             }
@@ -338,7 +387,7 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
                 changes.append({
                     "path": change.get("path") or "",
                     "changeType": str(change_kind or ""),
-                    "diff": clip(change.get("diff") or "", 8000),
+                    "diff": transcript_text(change.get("diff") or "", 8000),
                 })
             if changes:
                 found = {
@@ -357,14 +406,14 @@ def codex_item_events(thread_id: str, limit: int = 40) -> list[dict]:
                 if isinstance(result, dict):
                     results.append({
                         "domain": result.get("domain") or "",
-                        "snippet": clip(result.get("snippet") or "", 500),
+                        "snippet": transcript_text(result.get("snippet") or "", 500),
                     })
             found = {"role": "assistant", "kind": "search", "queries": queries,
                      "results": results[:6], "at": at}
         elif kind == "plan":
             text = payload.get("text") or ""
             if text.strip():
-                found = {"role": "assistant", "kind": "message", "text": clip(text, 12000),
+                found = {"role": "assistant", "kind": "message", "text": transcript_text(text, 12000),
                          "at": at, "phase": "plan"}
         elif kind in ("imageView", "subAgentActivity", "contextCompaction"):
             label = {
@@ -414,6 +463,8 @@ def collect_codex() -> dict:
         result["note"] = "未安装 / 无数据目录"
         return result
 
+    projects, assignments, project_aliases = codex_project_metadata()
+    project_lookup = {p["id"]: p for p in projects}
     active: set[str] = set()
     rows = []
     try:
@@ -429,6 +480,7 @@ def collect_codex() -> dict:
                 order = "source_updated_at" if "source_updated_at" in cols else "rowid"
                 extra = ", source_kind" if "source_kind" in cols else ""
                 extra += ", host_id" if "host_id" in cols else ""
+                extra += ", project_id" if "project_id" in cols else ", null as project_id"
                 rows = list(conn.execute(
                     f"select thread_id, display_title, cwd, source_updated_at{extra} "
                     f"from local_thread_catalog order by {order} desc limit 200"))
@@ -454,6 +506,7 @@ def collect_codex() -> dict:
                 sel = "id, title, cwd, updated_at_ms, archived, thread_source"
                 sel += ", first_user_message" if "first_user_message" in cols else ", null as first_user_message"
                 sel += ", preview" if "preview" in cols else ", null as preview"
+                sel += ", project_id" if "project_id" in cols else ", null as project_id"
                 history = list(conn.execute(
                     f"select {sel} from threads "
                     f"where coalesce(thread_source,'user') not in ('guardian_review','subagent')"))
@@ -474,6 +527,7 @@ def collect_codex() -> dict:
             "cwd": row["cwd"] or "",
             "source": "chatgpt" if (kind == "chatgpt" or host.startswith("chatgpt:")) else "local",
             "last": iso_to_ms(row["source_updated_at"]),
+            "projectId": row["project_id"],
         }
 
     sessions = []
@@ -496,6 +550,7 @@ def collect_codex() -> dict:
         )
         item["source"] = "local"
         item["archived"] = bool(row["archived"])
+        item["projectId"] = row["project_id"] or cat.get("projectId")
         sessions.append(item)
         seen.add(sid)
     for sid, cat in catalog.items():
@@ -511,7 +566,15 @@ def collect_codex() -> dict:
         )
         item["source"] = cat["source"]
         item["archived"] = False
+        item["projectId"] = cat.get("projectId")
         sessions.append(item)
+
+    for item in sessions:
+        pid = item.get("projectId")
+        pid = project_aliases.get(pid, pid) or assignments.get(item["id"])
+        project = project_lookup.get(pid)
+        item["projectId"] = pid
+        item["projectName"] = project["name"] if project else ""
 
     def group(item):
         if item["source"] == "local":
@@ -531,6 +594,10 @@ def collect_codex() -> dict:
         item["step"] = steps.get(item["id"], "")
 
     result["sessions"] = shown
+    for project in projects:
+        if project["membershipAvailable"]:
+            project["sessions"] = [s for s in sessions if s["projectId"] == project["id"]]
+    result["projects"] = projects
     result["busy"] = bool(active)
     if shown:
         result["session"] = shown[0]
@@ -591,6 +658,47 @@ def grok_roster() -> dict | None:
         if isinstance(value, dict) and isinstance(value.get("rows"), list):
             return value
     return None
+
+
+def grok_current_agent() -> str:
+    """Which Bot window is open right now (persisted selection slice `{agentId}`)."""
+    slots = os.path.join(grok_dir(), "sand-client-persistence")
+    if not os.path.isdir(slots):
+        return ""
+    for name in os.listdir(slots):
+        path = os.path.join(slots, name)
+        if not os.path.isfile(path) or os.path.getsize(path) > 2 * 1024 * 1024:
+            continue
+        try:
+            doc = read_json(path)
+        except Exception:
+            continue
+        value = doc.get("value") if isinstance(doc, dict) else None
+        if isinstance(value, dict) and isinstance(value.get("agentId"), str):
+            return value["agentId"]
+    return ""
+
+
+def marvis_current_conversation() -> tuple[str, bool]:
+    """Best-effort: the conversation with the latest AG-UI event (approximate)."""
+    if not os.path.exists(marvis_db()):
+        return "", False
+    try:
+        conn, tmp = open_sqlite(marvis_db())
+        try:
+            if "agui_events" in table_names(conn):
+                row = conn.execute(
+                    "select conversation_id from agui_events "
+                    "where conversation_id is not null order by seq desc limit 1").fetchone()
+                if row and row["conversation_id"]:
+                    return str(row["conversation_id"]), True
+        finally:
+            conn.close()
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        pass
+    return "", False
 
 
 def collect_grok() -> dict:
@@ -855,7 +963,8 @@ def collect_workbuddy() -> dict:
 
 # ----------------------------------------------------------------------------- detail mode
 def event(role: str, kind: str, text: str, at=None) -> dict:
-    return {"role": role, "kind": kind, "text": clip(text, 1500), "at": at}
+    limit = 12000 if kind == "message" else 8000
+    return {"role": role, "kind": kind, "text": transcript_text(text, limit), "at": at}
 
 
 def tail_lines(path: str, max_bytes: int = 400_000) -> list[str]:
@@ -994,7 +1103,7 @@ def detail_codex(session_id: str) -> dict:
                         role = payload.get("role") or "assistant"
                         if text.strip():
                             events.append(event("system" if role == "developer" else role,
-                                                "message", clip(text, 12000), stamp))
+                                                "message", text, stamp))
                     elif ptype in ("function_call", "custom_tool_call"):
                         raw = payload.get("arguments") or payload.get("input") or ""
                         if not isinstance(raw, str):
@@ -1002,12 +1111,12 @@ def detail_codex(session_id: str) -> dict:
                         events.append({
                             "role": "assistant", "kind": "tool",
                             "tool": payload.get("name") or "tool",
-                            "input": clip(raw, 8000), "at": stamp,
+                            "input": transcript_text(raw, 8000), "at": stamp,
                         })
                     elif ptype == "agent_message":
                         text = payload.get("message") or payload.get("text") or ""
                         if text:
-                            events.append(event("assistant", "message", clip(text, 12000), stamp))
+                            events.append(event("assistant", "message", text, stamp))
                 elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete", "turn_aborted"):
                     events.append(event("system", "event", payload.get("type"), stamp))
         except Exception as exc:
@@ -1057,10 +1166,10 @@ def detail_marvis(session_id: str) -> dict:
                         events.append({
                             "role": "assistant", "kind": "tool",
                             "tool": row["tool_name"] or "tool",
-                            "output": clip(text, 8000), "at": at,
+                            "output": transcript_text(text, 8000), "at": at,
                         })
                     else:
-                        events.append(event(role, "message", clip(text, 8000), at))
+                        events.append(event(role, "message", transcript_text(text, 8000), at))
             if "agent_activities" in tables:
                 for row in conn.execute(
                     "select agent_name, content, status, activity_time from agent_activities "
@@ -1424,6 +1533,21 @@ def discover_agents() -> list[dict]:
 
 def main() -> None:
     argv = sys.argv[1:]
+    if len(argv) >= 2 and argv[0] == "--current":
+        app = argv[1]
+        current, approx = "", False
+        try:
+            if app == "grokbot":
+                current = grok_current_agent()
+            elif app == "marvis":
+                current, approx = marvis_current_conversation()
+        except Exception as exc:
+            ERRORS.append({"app": app, "message": f"current: {exc}"})
+        print(json.dumps({
+            "app": app, "currentSessionId": current, "approx": approx, "errors": ERRORS,
+        }, ensure_ascii=False))
+        return
+
     if len(argv) >= 3 and argv[0] == "--session":
         app, session_id = argv[1], argv[2]
         handler = DETAILS.get(app)
